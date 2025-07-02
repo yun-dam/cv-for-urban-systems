@@ -76,3 +76,6 @@ ENV/
 # Logs
 *.log
 logs/
+# Documentation files (keep local only)
+CLAUDE.md
+gemini.md
