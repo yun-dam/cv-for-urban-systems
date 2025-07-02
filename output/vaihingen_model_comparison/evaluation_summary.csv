@@ -1,0 +1,8 @@
+Class,Pretrained_IoU,Finetuned_IoU,Improvement,Num_Samples
+impervious surface,0.0000,0.5659,+0.5658,389
+building,0.4598,0.6477,+0.1879,384
+low vegetation,0.0106,0.3176,+0.3070,383
+tree,0.5084,0.6083,+0.0999,389
+car,0.1868,0.2428,+0.0560,299
+background,0.0019,0.0000,-0.0019,258
+OVERALL,0.1946,0.3971,+0.2025,389
