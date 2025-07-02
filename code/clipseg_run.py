@@ -14,11 +14,19 @@ import tifffile
 # ==============================================================================
 # 1. Model Loading
 # ==============================================================================
-# MODEL_PATH = "CIDAS/clipseg-rd64-refined"
-MODEL_PATH = "./clipseg_finetuned_model/best_model"
-processor = CLIPSegProcessor.from_pretrained(MODEL_PATH)
-model = CLIPSegForImageSegmentation.from_pretrained(MODEL_PATH)
-model.eval()
+# Load both pretrained and finetuned models for comparison
+PRETRAINED_MODEL_PATH = "CIDAS/clipseg-rd64-refined"
+FINETUNED_MODEL_PATH = "./clipseg_finetuned_model/best_model"
+
+# Load pretrained model
+processor_pretrained = CLIPSegProcessor.from_pretrained(PRETRAINED_MODEL_PATH)
+model_pretrained = CLIPSegForImageSegmentation.from_pretrained(PRETRAINED_MODEL_PATH)
+model_pretrained.eval()
+
+# Load finetuned model
+processor_finetuned = CLIPSegProcessor.from_pretrained(FINETUNED_MODEL_PATH)
+model_finetuned = CLIPSegForImageSegmentation.from_pretrained(FINETUNED_MODEL_PATH)
+model_finetuned.eval()
 
 matplotlib.rcParams['font.family'] = 'Arial'
 
@@ -37,6 +45,7 @@ OUTPUT_DIR = "data/Vaihingen/finetune_data/test/outputs"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 NUM_SAMPLES_TO_TEST = 16
+RANDOM_SEED = 42  # Set seed for reproducible results
 
 CLASSES_COLORS_BGR = {
     'Impervious surfaces': (255, 255, 255),  # White
@@ -88,7 +97,11 @@ def potsdam_labels_to_mask_dict(label_path, class_color_map_bgr, prompts_list):
 # 4. Main Execution
 # ==============================================================================
 def main():
-
+    # Set random seed for reproducible results
+    random.seed(RANDOM_SEED)
+    np.random.seed(RANDOM_SEED)
+    torch.manual_seed(RANDOM_SEED)
+    
     try:
         all_patch_files = sorted([f for f in os.listdir(IMAGE_DIR) if f.endswith(".tif")])
         if len(all_patch_files) < NUM_SAMPLES_TO_TEST:
@@ -116,42 +129,68 @@ def main():
         # --- Model Inference ---
         image = Image.open(image_path).convert("RGB")
         images = [image for _ in PROMPTS]
-        inputs = processor(images=images, text=PROMPTS, return_tensors="pt", padding=True)
-
+        
+        # Pretrained model inference
+        inputs_pretrained = processor_pretrained(images=images, text=PROMPTS, return_tensors="pt", padding=True)
         with torch.no_grad():
-            outputs = model(**inputs)
-
-        masks = outputs.logits.sigmoid().squeeze().cpu().numpy()
-        resized_masks = [
+            outputs_pretrained = model_pretrained(**inputs_pretrained)
+        masks_pretrained = outputs_pretrained.logits.sigmoid().squeeze().cpu().numpy()
+        resized_masks_pretrained = [
             np.array(Image.fromarray(m).resize(image.size, resample=Image.BILINEAR))
-            for m in masks
+            for m in masks_pretrained
+        ]
+        
+        # Finetuned model inference
+        inputs_finetuned = processor_finetuned(images=images, text=PROMPTS, return_tensors="pt", padding=True)
+        with torch.no_grad():
+            outputs_finetuned = model_finetuned(**inputs_finetuned)
+        masks_finetuned = outputs_finetuned.logits.sigmoid().squeeze().cpu().numpy()
+        resized_masks_finetuned = [
+            np.array(Image.fromarray(m).resize(image.size, resample=Image.BILINEAR))
+            for m in masks_finetuned
         ]
 
-        # --- Generate Segmentation Map and Visualization ---
+        # --- Generate Segmentation Maps ---
         color_map_rgb = np.array([SEGMENTATION_COLORS_RGB[prompt] for prompt in PROMPTS], dtype=np.uint8)
-        stacked_masks = np.stack(resized_masks, axis=0)
-        pred_labels = np.argmax(stacked_masks, axis=0)
-        segmentation_map = color_map_rgb[pred_labels]
+        
+        # Pretrained segmentation map
+        stacked_masks_pretrained = np.stack(resized_masks_pretrained, axis=0)
+        pred_labels_pretrained = np.argmax(stacked_masks_pretrained, axis=0)
+        segmentation_map_pretrained = color_map_rgb[pred_labels_pretrained]
+        
+        # Finetuned segmentation map
+        stacked_masks_finetuned = np.stack(resized_masks_finetuned, axis=0)
+        pred_labels_finetuned = np.argmax(stacked_masks_finetuned, axis=0)
+        segmentation_map_finetuned = color_map_rgb[pred_labels_finetuned]
 
         gt_img_bgr = tifffile.imread(label_path)
 
-        fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 6), dpi=120)
-
-        ax1.imshow(np.array(image))
-        ax1.set_title(f"Original: {tile_file}", fontsize=12)
-        ax1.axis("off")
-
-        ax2.imshow(segmentation_map)
-        ax2.set_title("CLIPSeg Segmentation Map", fontsize=12)
-        ax2.axis("off")
-
-        ax3.imshow(gt_img_bgr)
-        ax3.set_title("Ground Truth", fontsize=12)
-        ax3.axis("off")
+        # --- 4-Panel Visualization ---
+        fig, axes = plt.subplots(2, 2, figsize=(16, 16), dpi=120)
+        
+        # Original image
+        axes[0, 0].imshow(np.array(image))
+        axes[0, 0].set_title(f"Original Image\n{tile_file}", fontsize=12)
+        axes[0, 0].axis("off")
+        
+        # Pretrained model output
+        axes[0, 1].imshow(segmentation_map_pretrained)
+        axes[0, 1].set_title("Pretrained CLIPSeg Output", fontsize=12)
+        axes[0, 1].axis("off")
+        
+        # Finetuned model output
+        axes[1, 0].imshow(segmentation_map_finetuned)
+        axes[1, 0].set_title("Finetuned CLIPSeg Output", fontsize=12)
+        axes[1, 0].axis("off")
+        
+        # Ground truth
+        axes[1, 1].imshow(gt_img_bgr)
+        axes[1, 1].set_title("Ground Truth", fontsize=12)
+        axes[1, 1].axis("off")
 
         plt.tight_layout()
-        save_path = os.path.join(OUTPUT_DIR, f"{Path(tile_file).stem}_comparison.png")
-        plt.savefig(save_path)
+        save_path = os.path.join(OUTPUT_DIR, f"{Path(tile_file).stem}_4panel_comparison.png")
+        plt.savefig(save_path, bbox_inches='tight')
         plt.close(fig)
 
         # --- IoU Calculation ---
@@ -159,10 +198,16 @@ def main():
             mask_gt_dict = potsdam_labels_to_mask_dict(label_path, CLASSES_COLORS_BGR, PROMPTS)
 
             print(f"\n📊 IoU for Patch: {tile_file}")
+            print("  Pretrained Model:")
             for i, prompt in enumerate(PROMPTS):
-                iou = compute_iou(resized_masks[i], mask_gt_dict[prompt])
-                print(f"  - {prompt:20s}: IoU = {iou:.4f}")
-            print("-" * 30)
+                iou = compute_iou(resized_masks_pretrained[i], mask_gt_dict[prompt])
+                print(f"    - {prompt:20s}: IoU = {iou:.4f}")
+            
+            print("  Finetuned Model:")
+            for i, prompt in enumerate(PROMPTS):
+                iou = compute_iou(resized_masks_finetuned[i], mask_gt_dict[prompt])
+                print(f"    - {prompt:20s}: IoU = {iou:.4f}")
+            print("-" * 50)
         except Exception as e:
             print(f"An error occurred during IoU calculation for {tile_file}: {e}")
 
