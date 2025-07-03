@@ -5,21 +5,24 @@ from tqdm import tqdm
 import albumentations as A
 from PIL import Image
 import random
-from sklearn.model_selection import train_test_split
+import shutil
+from sklearn.model_selection import KFold
 
 # ----------------------------
 # Configuration
 # ----------------------------
 
-# Input directories (all original data)
-ORIGINAL_IMG_DIR = "./data/Vaihingen/finetune_data/train/images"
-ORIGINAL_MASK_DIR = "./data/Vaihingen/finetune_data/train/masks"
+# Input from the pool created by prepare_ft_data.py
+BASE_INPUT_DIR = "./data/Vaihingen/finetune_data/"
+POOL_IMG_DIR = os.path.join(BASE_INPUT_DIR, "finetune_pool/images")
+POOL_MASK_DIR = os.path.join(BASE_INPUT_DIR, "finetune_pool/masks")
 
-# Output directories for augmented train/val split
-TRAIN_IMG_DIR = "./data/Vaihingen/finetune_data/train_augmented/images"
-TRAIN_MASK_DIR = "./data/Vaihingen/finetune_data/train_augmented/masks"
-VAL_IMG_DIR = "./data/Vaihingen/finetune_data/val_augmented/images"
-VAL_MASK_DIR = "./data/Vaihingen/finetune_data/val_augmented/masks"
+# Base output directory for all generated data
+BASE_OUTPUT_DIR = os.path.join(BASE_INPUT_DIR, "cv_prepared_data")
+
+# Sub-directories for CV folds and the final full training set
+CV_FOLDS_DIR = os.path.join(BASE_OUTPUT_DIR, "cv_folds")
+ALL_AUGMENTED_DIR = os.path.join(BASE_OUTPUT_DIR, "all_data_augmented")
 
 # Class list
 CLASSES = [
@@ -31,16 +34,15 @@ CLASSES = [
     "background"
 ]
 
-# Augmentation settings
+# Augmentation and Cross-validation settings
 N_AUG_PER_IMAGE = 5  # 1 original + 4 augmented = 5 total per image
-TRAIN_VAL_SPLIT = 0.8  # 80% train, 20% val
+N_SPLITS = 5         # 5-fold cross-validation
 RANDOM_SEED = 42
 
 # ----------------------------
 # Augmentation Pipeline
 # ----------------------------
 
-# Geometric and photometric transformations
 transform = A.Compose([
     A.HorizontalFlip(p=0.5),
     A.VerticalFlip(p=0.3),
@@ -55,9 +57,6 @@ transform = A.Compose([
     ),
     A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.7),
     A.HueSaturationValue(hue_shift_limit=15, sat_shift_limit=25, val_shift_limit=15, p=0.5),
-    A.RGBShift(r_shift_limit=20, g_shift_limit=20, b_shift_limit=20, p=0.5),
-    A.GaussNoise(var_limit=(10.0, 50.0), p=0.3),
-    A.GaussianBlur(blur_limit=3, p=0.3),
 ], additional_targets={f"mask{i}": "mask" for i in range(len(CLASSES))})
 
 # ----------------------------
@@ -65,181 +64,109 @@ transform = A.Compose([
 # ----------------------------
 
 def load_image(path):
-    """Load image as RGB using OpenCV (BGR to RGB)."""
     img_bgr = cv2.imread(path, cv2.IMREAD_COLOR)
     if img_bgr is None:
         raise FileNotFoundError(f"Image not found: {path}")
     return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
 def save_image(path, img_rgb):
-    """Save RGB image using PIL."""
-    if path.endswith('.tif'):
-        Image.fromarray(img_rgb).save(path)
-    else:
-        Image.fromarray(img_rgb).save(path)
+    Image.fromarray(img_rgb).save(path)
 
 def load_mask(path):
-    """Load grayscale mask (0 or 255) using OpenCV."""
     mask = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if mask is None:
         print(f"Warning: Mask not found {path}, creating empty mask")
-        return np.zeros((352, 352), dtype=np.uint8)
+        return np.zeros((512, 512), dtype=np.uint8)
     return mask
 
 def save_mask(path, mask):
-    """Save binary mask as PNG using PIL."""
     Image.fromarray(mask).save(path)
 
-def augment_single_image(image_np, mask_list, img_base, n_augmentations):
-    """
-    Generate augmented versions of a single image and its masks.
-    Returns list of (image, masks, filename_suffix) tuples.
-    """
-    h, w = image_np.shape[:2]
-    results = []
-    
-    # 1. Add original (no augmentation)
-    results.append((image_np, mask_list, "orig"))
-    
-    # 2. Generate augmented versions
-    for aug_idx in range(n_augmentations - 1):  # -1 because we already have original
-        try:
-            transformed = transform(
-                image=image_np,
-                **{f"mask{i}": mask_list[i] for i in range(len(CLASSES))}
-            )
-            
-            aug_image = transformed["image"]
-            aug_masks = [transformed[f"mask{i}"] for i in range(len(CLASSES))]
-            aug_suffix = f"aug{aug_idx:02d}"
-            
-            results.append((aug_image, aug_masks, aug_suffix))
-            
-        except Exception as e:
-            print(f"Warning: Augmentation failed for {img_base}, iteration {aug_idx}: {e}")
-            # If augmentation fails, just duplicate the original
-            results.append((image_np, mask_list, f"dup{aug_idx:02d}"))
-    
-    return results
-
-def save_augmented_data(results, img_base, output_img_dir, output_mask_dir):
-    """Save augmented images and masks to specified directories."""
+def augment_and_save_set(file_list, input_img_dir, input_mask_dir, output_img_dir, output_mask_dir, desc):
     os.makedirs(output_img_dir, exist_ok=True)
     os.makedirs(output_mask_dir, exist_ok=True)
-    
-    for image, masks, suffix in results:
-        # Save image
-        img_filename = f"{img_base}_{suffix}.tif"
-        img_path = os.path.join(output_img_dir, img_filename)
-        save_image(img_path, image)
+
+    for img_name in tqdm(file_list, desc=desc):
+        img_base = os.path.splitext(img_name)[0]
+        img_path = os.path.join(input_img_dir, img_name)
         
-        # Save masks
+        image_np = load_image(img_path)
+        h, w = image_np.shape[:2]
+        
+        mask_list = []
+        for cls in CLASSES:
+            mask_path = os.path.join(input_mask_dir, f"{img_base}_{cls}.png")
+            mask_np = load_mask(mask_path)
+            if mask_np.shape[:2] != (h, w):
+                mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
+            mask_list.append(mask_np)
+
+        # Save original version
+        save_image(os.path.join(output_img_dir, f"{img_base}_orig.tif"), image_np)
         for i, cls in enumerate(CLASSES):
-            mask_filename = f"{img_base}_{suffix}_{cls}.png"
-            mask_path = os.path.join(output_mask_dir, mask_filename)
-            save_mask(mask_path, masks[i])
+            save_mask(os.path.join(output_mask_dir, f"{img_base}_orig_{cls}.png"), mask_list[i])
+
+        # Save augmented versions
+        for aug_idx in range(N_AUG_PER_IMAGE - 1):
+            transformed = transform(image=image_np, **{f"mask{i}": mask_list[i] for i in range(len(CLASSES))})
+            aug_image = transformed["image"]
+            aug_masks = [transformed[f"mask{i}"] for i in range(len(CLASSES))]
+            
+            save_image(os.path.join(output_img_dir, f"{img_base}_aug{aug_idx:02d}.tif"), aug_image)
+            for i, cls in enumerate(CLASSES):
+                save_mask(os.path.join(output_mask_dir, f"{img_base}_aug{aug_idx:02d}_{cls}.png"), aug_masks[i])
 
 # ----------------------------
 # Main Logic
 # ----------------------------
 
 def main():
-    """
-    Main function: Augment all images and split into train/val sets.
-    """
-    print("🚀 Starting augmentation and train/val split...")
+    print("🚀 Starting data preparation for Cross-Validation and Final Training...")
     
-    # Set random seeds
     random.seed(RANDOM_SEED)
     np.random.seed(RANDOM_SEED)
     
-    # 1. Get all original images
-    image_files = sorted([
-        f for f in os.listdir(ORIGINAL_IMG_DIR)
-        if f.lower().endswith((".tif", ".png", ".jpg", ".jpeg"))
-    ])
+    if os.path.exists(BASE_OUTPUT_DIR):
+        print(f"Removing old directory: {BASE_OUTPUT_DIR}")
+        shutil.rmtree(BASE_OUTPUT_DIR)
+    
+    image_files = np.array(sorted([f for f in os.listdir(POOL_IMG_DIR) if f.lower().endswith(".tif")]))
     
     if len(image_files) == 0:
-        raise RuntimeError(f"No image files found in: {ORIGINAL_IMG_DIR}")
+        raise RuntimeError(f"No image files found in: {POOL_IMG_DIR}")
     
-    print(f"Found {len(image_files)} original images")
+    print(f"Found {len(image_files)} original images in the pool.")
     
-    # 2. Split original images into train/val (to avoid data leakage)
-    train_files, val_files = train_test_split(
-        image_files, 
-        train_size=TRAIN_VAL_SPLIT, 
-        random_state=RANDOM_SEED,
-        shuffle=True
-    )
+    # --- Task 1: Create 5-Fold Cross-Validation Data ---
+    print("\n--- Task 1: Creating 5-Fold CV Datasets ---")
+    kf = KFold(n_splits=N_SPLITS, shuffle=True, random_state=RANDOM_SEED)
     
-    print(f"Train images: {len(train_files)} -> Will generate {len(train_files) * N_AUG_PER_IMAGE} augmented")
-    print(f"Val images: {len(val_files)} -> Will generate {len(val_files) * N_AUG_PER_IMAGE} augmented")
+    for fold_idx, (train_indices, val_indices) in enumerate(kf.split(image_files)):
+        fold_num = fold_idx + 1
+        print(f"\n===== Processing Fold {fold_num}/{N_SPLITS} =====")
+        
+        train_files = image_files[train_indices]
+        val_files = image_files[val_indices]
+        
+        fold_dir = os.path.join(CV_FOLDS_DIR, f"fold_{fold_num}")
+        train_output_img_dir = os.path.join(fold_dir, "train_augmented/images")
+        train_output_mask_dir = os.path.join(fold_dir, "train_augmented/masks")
+        val_output_img_dir = os.path.join(fold_dir, "val_augmented/images")
+        val_output_mask_dir = os.path.join(fold_dir, "val_augmented/masks")
+        
+        augment_and_save_set(train_files, POOL_IMG_DIR, POOL_MASK_DIR, train_output_img_dir, train_output_mask_dir, desc=f"Fold {fold_num} [Train]")
+        augment_and_save_set(val_files, POOL_IMG_DIR, POOL_MASK_DIR, val_output_img_dir, val_output_mask_dir, desc=f"Fold {fold_num} [Val]")
+
+    # --- Task 2: Create Full Augmented Dataset for Final Training ---
+    print("\n--- Task 2: Creating Full Augmented Dataset for Final Training ---")
+    final_train_img_dir = os.path.join(ALL_AUGMENTED_DIR, 'images')
+    final_train_mask_dir = os.path.join(ALL_AUGMENTED_DIR, 'masks')
     
-    # 3. Process training images
-    print("\\n📈 Processing training images...")
-    for img_name in tqdm(train_files, desc="Augmenting training data"):
-        img_base = os.path.splitext(img_name)[0]
-        img_path = os.path.join(ORIGINAL_IMG_DIR, img_name)
-        
-        # Load image
-        image_np = load_image(img_path)
-        h, w = image_np.shape[:2]
-        
-        # Load all class masks
-        mask_list = []
-        for cls in CLASSES:
-            mask_path = os.path.join(ORIGINAL_MASK_DIR, f"{img_base}_{cls}.png")
-            mask_np = load_mask(mask_path)
-            if mask_np.shape[0] != h or mask_np.shape[1] != w:
-                mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
-            mask_list.append(mask_np)
-        
-        # Generate augmented versions
-        augmented_results = augment_single_image(image_np, mask_list, img_base, N_AUG_PER_IMAGE)
-        
-        # Save to training directory
-        save_augmented_data(augmented_results, img_base, TRAIN_IMG_DIR, TRAIN_MASK_DIR)
-    
-    # 4. Process validation images
-    print("\\n📊 Processing validation images...")
-    for img_name in tqdm(val_files, desc="Augmenting validation data"):
-        img_base = os.path.splitext(img_name)[0]
-        img_path = os.path.join(ORIGINAL_IMG_DIR, img_name)
-        
-        # Load image
-        image_np = load_image(img_path)
-        h, w = image_np.shape[:2]
-        
-        # Load all class masks
-        mask_list = []
-        for cls in CLASSES:
-            mask_path = os.path.join(ORIGINAL_MASK_DIR, f"{img_base}_{cls}.png")
-            mask_np = load_mask(mask_path)
-            if mask_np.shape[0] != h or mask_np.shape[1] != w:
-                mask_np = cv2.resize(mask_np, (w, h), interpolation=cv2.INTER_NEAREST)
-            mask_list.append(mask_np)
-        
-        # Generate augmented versions
-        augmented_results = augment_single_image(image_np, mask_list, img_base, N_AUG_PER_IMAGE)
-        
-        # Save to validation directory
-        save_augmented_data(augmented_results, img_base, VAL_IMG_DIR, VAL_MASK_DIR)
-    
-    # 5. Summary
-    total_train_images = len(os.listdir(TRAIN_IMG_DIR))
-    total_val_images = len(os.listdir(VAL_IMG_DIR))
-    total_train_masks = len(os.listdir(TRAIN_MASK_DIR))
-    total_val_masks = len(os.listdir(VAL_MASK_DIR))
-    
-    print("\\n✅ Augmentation and split completed!")
-    print("📁 Results:")
-    print(f"   Training images: {total_train_images}")
-    print(f"   Training masks: {total_train_masks}")
-    print(f"   Validation images: {total_val_images}")
-    print(f"   Validation masks: {total_val_masks}")
-    print(f"\\n📋 Original split:")
-    print(f"   Train files: {train_files}")
-    print(f"   Val files: {val_files}")
+    augment_and_save_set(image_files, POOL_IMG_DIR, POOL_MASK_DIR, final_train_img_dir, final_train_mask_dir, desc="Augmenting all data")
+
+    print("\n✅ All data preparation completed!")
+    print(f"📁 5-Fold CV data saved in: {CV_FOLDS_DIR}")
+    print(f"📁 Full augmented training data saved in: {ALL_AUGMENTED_DIR}")
 
 if __name__ == "__main__":
     main()

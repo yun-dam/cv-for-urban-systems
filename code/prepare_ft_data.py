@@ -14,18 +14,20 @@ from pathlib import Path
 CROPPED_IMAGE_DIR = "./data/Vaihingen/top_cropped_512"
 CROPPED_LABEL_DIR = "./data/Vaihingen/ground_truth_cropped_512"
 
-# Output directories (for fine-tuning data)
+# --- MODIFIED ---
+# Output directories
+# This script now creates a single pool of data for fine-tuning.
+# The split into train/val and augmentation will be handled by a subsequent script.
 BASE_OUTPUT_DIR = "./data/Vaihingen/finetune_data"
-TRAIN_IMG_DIR = os.path.join(BASE_OUTPUT_DIR, "train/images")
-TRAIN_MASK_DIR = os.path.join(BASE_OUTPUT_DIR, "train/masks")
-VAL_IMG_DIR = os.path.join(BASE_OUTPUT_DIR, "val/images")
-VAL_MASK_DIR = os.path.join(BASE_OUTPUT_DIR, "val/masks")
+FINETUNE_POOL_IMG_DIR = os.path.join(BASE_OUTPUT_DIR, "finetune_pool/images")
+FINETUNE_POOL_MASK_DIR = os.path.join(BASE_OUTPUT_DIR, "finetune_pool/masks")
 TEST_IMG_DIR = os.path.join(BASE_OUTPUT_DIR, "test/images")
 TEST_LABEL_DIR = os.path.join(BASE_OUTPUT_DIR, "test/labels") # Test set labels remain unchanged
 
+# --- MODIFIED ---
 # Dataset split parameters
-NUM_TRAIN = 20
-NUM_VAL = 50
+# We select a pool of 20 images that will later be split into train/val sets.
+NUM_FINETUNE_POOL = 20
 RANDOM_SEED = 42 # For reproducibility
 
 # Class and color definitions (same as before)
@@ -44,49 +46,46 @@ CLASSES = list(GT_COLOR_VALUES.keys())
 # ==============================================================================
 def prepare_data():
     """
-    1. Split dataset into train, val, test
-    2. Generate binary masks for train and val sets
+    1. Splits cropped data into a 'finetune_pool' (for later train/val split) and a 'test' set.
+    2. For the 'finetune_pool', it generates binary masks for each class.
+    3. For the 'test' set, it copies the original images and labels.
     """
     print("Start preparing fine-tuning data...")
     
     # Create all output directories
-    for path in [TRAIN_IMG_DIR, TRAIN_MASK_DIR, VAL_IMG_DIR, VAL_MASK_DIR, TEST_IMG_DIR, TEST_LABEL_DIR]:
+    for path in [FINETUNE_POOL_IMG_DIR, FINETUNE_POOL_MASK_DIR, TEST_IMG_DIR, TEST_LABEL_DIR]:
         os.makedirs(path, exist_ok=True)
 
     all_files = sorted([f for f in os.listdir(CROPPED_IMAGE_DIR) if f.endswith(".tif")])
     random.seed(RANDOM_SEED)
     random.shuffle(all_files)
 
-    # Split file lists
-    train_files = all_files[:NUM_TRAIN]
-    val_files = all_files[NUM_TRAIN : NUM_TRAIN + NUM_VAL]
-    test_files = all_files[NUM_TRAIN + NUM_VAL:]
+    # --- MODIFIED ---
+    # Split file lists into a finetune pool and a test set
+    finetune_pool_files = all_files[:NUM_FINETUNE_POOL]
+    test_files = all_files[NUM_FINETUNE_POOL:]
 
-    print(f"Dataset split: {len(train_files)} train, {len(val_files)} val, {len(test_files)} test")
+    print(f"Dataset split: {len(finetune_pool_files)} for finetune pool, {len(test_files)} for test set.")
 
-    # --- Process train and val sets ---
-    for split_name, file_list, out_img_dir, out_mask_dir in [
-        ("Train Set", train_files, TRAIN_IMG_DIR, TRAIN_MASK_DIR),
-        ("Validation Set", val_files, VAL_IMG_DIR, VAL_MASK_DIR)
-    ]:
-        print(f"\nProcessing {split_name}...")
-        for filename in tqdm(file_list, desc=f"Processing {split_name}"):
-            # 1. Copy image file
-            shutil.copy(os.path.join(CROPPED_IMAGE_DIR, filename), os.path.join(out_img_dir, filename))
+    # --- Process finetune pool ---
+    print(f"\nProcessing Finetune Pool...")
+    for filename in tqdm(finetune_pool_files, desc="Processing Finetune Pool"):
+        # 1. Copy image file
+        shutil.copy(os.path.join(CROPPED_IMAGE_DIR, filename), os.path.join(FINETUNE_POOL_IMG_DIR, filename))
 
-            # 2. Create and save binary masks
-            label_path = os.path.join(CROPPED_LABEL_DIR, filename)
-            label_img = tifffile.imread(label_path)
+        # 2. Create and save binary masks
+        label_path = os.path.join(CROPPED_LABEL_DIR, filename)
+        label_img = tifffile.imread(label_path)
+        
+        base_name = Path(filename).stem
+        for class_name, color in GT_COLOR_VALUES.items():
+            mask = np.all(label_img == np.array(color), axis=-1)
+            mask_img = Image.fromarray((mask * 255).astype(np.uint8))
             
-            base_name = Path(filename).stem
-            for class_name, color in GT_COLOR_VALUES.items():
-                mask = np.all(label_img == np.array(color), axis=-1)
-                mask_img = Image.fromarray((mask * 255).astype(np.uint8))
-                
-                # Replace spaces in class name with underscores for valid filenames
-                safe_class_name = class_name.replace(" ", "_").replace("/", "_")
-                mask_filename = f"{base_name}_{safe_class_name}.png"
-                mask_img.save(os.path.join(out_mask_dir, mask_filename))
+            # Replace spaces in class name with underscores for valid filenames
+            safe_class_name = class_name.replace(" ", "_").replace("/", "_")
+            mask_filename = f"{base_name}_{safe_class_name}.png"
+            mask_img.save(os.path.join(FINETUNE_POOL_MASK_DIR, mask_filename))
 
     # --- Process test set ---
     print("\nProcessing Test Set (copying files only)...")
@@ -95,7 +94,8 @@ def prepare_data():
         shutil.copy(os.path.join(CROPPED_LABEL_DIR, filename), os.path.join(TEST_LABEL_DIR, filename))
 
     print("\n✅ Data preparation completed!")
-    print(f"Data saved in: {BASE_OUTPUT_DIR}")
+    print(f"Finetune pool data (images and masks) created in: {Path(FINETUNE_POOL_IMG_DIR).parent}")
+    print(f"Test data created in: {Path(TEST_IMG_DIR).parent}")
 
 if __name__ == "__main__":
     prepare_data()

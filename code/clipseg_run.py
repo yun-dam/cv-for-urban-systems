@@ -19,7 +19,7 @@ from datetime import datetime
 # ==============================================================================
 # Load both pretrained and finetuned models for comparison
 PRETRAINED_MODEL_PATH = "CIDAS/clipseg-rd64-refined"
-FINETUNED_MODEL_PATH = "./clipseg_finetuned_model/best_model"
+FINETUNED_MODEL_PATH = "./clipseg_finetuned_model_searched/best_model"
 
 # Load pretrained model
 processor_pretrained = CLIPSegProcessor.from_pretrained(PRETRAINED_MODEL_PATH)
@@ -38,10 +38,10 @@ matplotlib.rcParams['font.family'] = 'Arial'
 # ==============================================================================
 IMAGE_DIR = "data/Vaihingen/finetune_data/test/images"
 LABEL_DIR = "data/Vaihingen/finetune_data/test/labels"
-OUTPUT_DIR = "output/vaihingen_model_comparison"
+OUTPUT_DIR = "output/vaihingen_model_comparison_2"
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-NUM_SAMPLES_TO_TEST = 16
+NUM_SAMPLES_TO_TEST = 100
 RANDOM_SEED = 42  # Set seed for reproducible results
 RUN_FULL_EVALUATION = True  # Set to True to evaluate on full test set
 
@@ -328,6 +328,16 @@ def main():
 
         gt_img_bgr = tifffile.imread(label_path)
 
+        # --- IoU Calculation for Visualization ---
+        iou_info = {'pretrained': {}, 'finetuned': {}}
+        try:
+            mask_gt_dict = potsdam_labels_to_mask_dict(label_path, CLASSES_COLORS_BGR, PROMPTS)
+            for i, prompt in enumerate(PROMPTS):
+                iou_info['pretrained'][prompt] = compute_iou(resized_masks_pretrained[i], mask_gt_dict[prompt])
+                iou_info['finetuned'][prompt] = compute_iou(resized_masks_finetuned[i], mask_gt_dict[prompt])
+        except Exception as e:
+            print(f"An error occurred during IoU calculation for {tile_file}: {e}")
+
         # --- 4-Panel Visualization ---
         fig, axes = plt.subplots(2, 2, figsize=(16, 16), dpi=120)
         
@@ -337,13 +347,19 @@ def main():
         axes[0, 0].axis("off")
         
         # Pretrained model output
+        iou_text_pretrained = "IoU Scores:\n" + "\n".join([
+            f"  - {p}: {iou_info['pretrained'].get(p, float('nan')):.3f}" for p in PROMPTS
+        ])
         axes[0, 1].imshow(segmentation_map_pretrained)
-        axes[0, 1].set_title("Pretrained CLIPSeg Output", fontsize=12)
+        axes[0, 1].set_title(f"Pretrained CLIPSeg Output\n\n{iou_text_pretrained}", fontsize=10, loc='left')
         axes[0, 1].axis("off")
         
         # Finetuned model output
+        iou_text_finetuned = "IoU Scores:\n" + "\n".join([
+            f"  - {p}: {iou_info['finetuned'].get(p, float('nan')):.3f}" for p in PROMPTS
+        ])
         axes[1, 0].imshow(segmentation_map_finetuned)
-        axes[1, 0].set_title("Finetuned CLIPSeg Output", fontsize=12)
+        axes[1, 0].set_title(f"Finetuned CLIPSeg Output\n\n{iou_text_finetuned}", fontsize=10, loc='left')
         axes[1, 0].axis("off")
         
         # Ground truth
@@ -351,28 +367,24 @@ def main():
         axes[1, 1].set_title("Ground Truth", fontsize=12)
         axes[1, 1].axis("off")
 
-        plt.tight_layout()
+        plt.tight_layout(pad=2.0)
         save_path = os.path.join(OUTPUT_DIR, f"{Path(tile_file).stem}_4panel_comparison.png")
         plt.savefig(save_path, bbox_inches='tight')
         plt.close(fig)
 
         # --- IoU Calculation ---
-        try:
-            mask_gt_dict = potsdam_labels_to_mask_dict(label_path, CLASSES_COLORS_BGR, PROMPTS)
-
-            print(f"\n📊 IoU for Patch: {tile_file}")
+        # This part is now for printing to console, using the calculated values
+        print(f"\n📊 IoU for Patch: {tile_file}")
+        if iou_info.get('pretrained'):
             print("  Pretrained Model:")
-            for i, prompt in enumerate(PROMPTS):
-                iou = compute_iou(resized_masks_pretrained[i], mask_gt_dict[prompt])
+            for prompt, iou in iou_info['pretrained'].items():
                 print(f"    - {prompt:20s}: IoU = {iou:.4f}")
-            
+        
+        if iou_info.get('finetuned'):
             print("  Finetuned Model:")
-            for i, prompt in enumerate(PROMPTS):
-                iou = compute_iou(resized_masks_finetuned[i], mask_gt_dict[prompt])
+            for prompt, iou in iou_info['finetuned'].items():
                 print(f"    - {prompt:20s}: IoU = {iou:.4f}")
-            print("-" * 50)
-        except Exception as e:
-            print(f"An error occurred during IoU calculation for {tile_file}: {e}")
+        print("-" * 50)
 
 if __name__ == "__main__":
     main()

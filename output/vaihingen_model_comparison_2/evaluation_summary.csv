@@ -1,0 +1,12 @@
+Class,Pretrained_IoU,Finetuned_IoU,Improvement,Num_Samples
+impervious surface,0,0.5349,0.5349,389
+building,0.4598,0.6155,0.1558,384
+low vegetation,0.0106,0.2183,0.2077,383
+tree,0.5084,0.5981,0.0897,389
+car,0.1868,0.2351,0.0483,299
+background,0.0019,0,-0.0019,258
+OVERALL,0.1946,0.367,0.1724,389
+,,,,
+"""learning_rate"": 1e-05,",,,,
+"""dice_weight"": 0.5,",,,,
+"""batch_size"": 2",,,,
