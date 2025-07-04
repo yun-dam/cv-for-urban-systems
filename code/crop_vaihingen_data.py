@@ -1,23 +1,28 @@
 import os
+import sys
 import tifffile
 import numpy as np
 from tqdm import tqdm
 from pathlib import Path
 
-# ==============================================================================
-# Configuration
-# ==============================================================================
-# Original data directories
-ORIGINAL_IMAGE_DIR = "./data/Vaihingen/top"
-ORIGINAL_LABEL_DIR = "./data/Vaihingen/ground_truth"
+# 添加项目根目录到Python路径
+sys.path.append(str(Path(__file__).parent.parent))
+from config import *
 
-# Output directories for cropped data
-CROPPED_IMAGE_DIR = "./data/Vaihingen/top_cropped_512"
-CROPPED_LABEL_DIR = "./data/Vaihingen/ground_truth_cropped_512"
+# ==============================================================================
+# Configuration - 使用config.py中的配置
+# ==============================================================================
+# 使用config.py中定义的路径
+ORIGINAL_IMAGE_DIR = str(VAIHINGEN_DIR / "top")
+ORIGINAL_LABEL_DIR = str(VAIHINGEN_DIR / "ground_truth")
 
-# Define patch size and stride
-PATCH_SIZE = 512
-STRIDE = 512 # No overlap if equal to PATCH_SIZE
+# 输出目录
+CROPPED_IMAGE_DIR = str(VAIHINGEN_DIR / "top_cropped_512")
+CROPPED_LABEL_DIR = str(VAIHINGEN_LABELS_DIR)
+
+# 从config.py获取图像处理参数
+PATCH_SIZE = CROP_SIZE
+STRIDE = CROP_SIZE  # No overlap if equal to PATCH_SIZE
 
 # ==============================================================================
 # Main Function
@@ -73,8 +78,8 @@ def crop_dataset():
                 patch_filename = f"{base_name}_patch_{y}_{x}.tif"
 
                 # Save patches
-                tifffile.imsave(os.path.join(CROPPED_IMAGE_DIR, patch_filename), image_patch)
-                tifffile.imsave(os.path.join(CROPPED_LABEL_DIR, patch_filename), label_patch)
+                tifffile.imwrite(os.path.join(CROPPED_IMAGE_DIR, patch_filename), image_patch)
+                tifffile.imwrite(os.path.join(CROPPED_LABEL_DIR, patch_filename), label_patch)
                 total_patches += 1
 
     print(f"\nCropping finished! Generated {total_patches} patches in total.")

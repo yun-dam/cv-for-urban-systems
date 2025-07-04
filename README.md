@@ -1,2 +1,0 @@
-# cv-for-urban-systems
-

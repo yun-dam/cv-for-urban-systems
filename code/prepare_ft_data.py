@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 import random
 import tifffile
@@ -7,39 +8,31 @@ from PIL import Image
 from tqdm import tqdm
 from pathlib import Path
 
+# 添加项目根目录到Python路径
+sys.path.append(str(Path(__file__).parent.parent))
+from config import *
+
 # ==============================================================================
-# Configuration
+# Configuration - 使用config.py中的配置
 # ==============================================================================
-# Input directories (cropped data)
-CROPPED_IMAGE_DIR = "./data/Vaihingen/top_cropped_512"
-CROPPED_LABEL_DIR = "./data/Vaihingen/ground_truth_cropped_512"
+# 使用config.py中定义的路径
+CROPPED_IMAGE_DIR = str(VAIHINGEN_IMAGES_DIR)
+CROPPED_LABEL_DIR = str(VAIHINGEN_LABELS_DIR)
 
-# --- MODIFIED ---
-# Output directories
-# This script now creates a single pool of data for fine-tuning.
-# The split into train/val and augmentation will be handled by a subsequent script.
-BASE_OUTPUT_DIR = "./data/Vaihingen/finetune_data"
-FINETUNE_POOL_IMG_DIR = os.path.join(BASE_OUTPUT_DIR, "finetune_pool/images")
-FINETUNE_POOL_MASK_DIR = os.path.join(BASE_OUTPUT_DIR, "finetune_pool/masks")
-TEST_IMG_DIR = os.path.join(BASE_OUTPUT_DIR, "test/images")
-TEST_LABEL_DIR = os.path.join(BASE_OUTPUT_DIR, "test/labels") # Test set labels remain unchanged
+# 输出目录 - 使用config.py中的配置
+BASE_OUTPUT_DIR = str(FINETUNE_DATA_DIR)
+FINETUNE_POOL_IMG_DIR = str(ORIGINAL_IMG_DIR)
+FINETUNE_POOL_MASK_DIR = str(ORIGINAL_MASK_DIR)
+TEST_IMG_DIR = str(FINETUNE_DATA_DIR / "test/images")
+TEST_LABEL_DIR = str(FINETUNE_DATA_DIR / "test/labels")
 
-# --- MODIFIED ---
-# Dataset split parameters
-# We select a pool of 20 images that will later be split into train/val sets.
-NUM_FINETUNE_POOL = 20
-RANDOM_SEED = 42 # For reproducibility
+# 数据集分割参数 - 使用config.py中的配置
+NUM_FINETUNE_POOL = DATASET_CONFIG['few_shot_pool_size']
+RANDOM_SEED = DATASET_CONFIG['random_seed']
 
-# Class and color definitions (same as before)
-GT_COLOR_VALUES = {
-    'impervious surface': (255, 255, 255),
-    'building': (0, 0, 255),
-    'low vegetation': (0, 255, 255),
-    'tree': (0, 255, 0),
-    'car': (255, 255, 0),
-    'background': (255, 0, 0)
-}
-CLASSES = list(GT_COLOR_VALUES.keys())
+# 类别和颜色定义 - 使用config.py中的配置
+GT_COLOR_VALUES = CLASS_COLORS_BGR
+CLASSES = URBAN_CLASSES
 
 # ==============================================================================
 # Main Function
