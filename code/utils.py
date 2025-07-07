@@ -19,6 +19,7 @@ from pathlib import Path
 from torch.nn.utils.rnn import pad_sequence
 from typing import List, Dict
 import json
+import albumentations as A
 
 # 导入配置
 # 这里的 '*' 会导入新版config.py中的所有全局变量和配置字典
@@ -148,6 +149,24 @@ def evaluate_model(model, val_loader, device, dice_weight: float, desc_str: str 
 # ==============================================================================
 # 其他公共函数 (已修正)
 # ==============================================================================
+def get_augmentation_transform():
+    """获取数据增强变换，基于配置文件"""
+    transforms = []
+    if AUGMENTATION_CONFIG.get('horizontal_flip'):
+        transforms.append(A.HorizontalFlip(p=0.5))
+    if AUGMENTATION_CONFIG.get('vertical_flip'):
+        transforms.append(A.VerticalFlip(p=0.5))
+    if 'rotation_range' in AUGMENTATION_CONFIG:
+        min_angle, max_angle = AUGMENTATION_CONFIG['rotation_range']
+        transforms.append(A.Rotate(limit=(min_angle, max_angle), p=0.5))
+    if 'brightness_limit' in AUGMENTATION_CONFIG:
+        transforms.append(A.RandomBrightnessContrast(
+            brightness_limit=AUGMENTATION_CONFIG['brightness_limit'],
+            contrast_limit=AUGMENTATION_CONFIG.get('contrast_limit', 0.2),
+            p=0.5
+        ))
+    return A.Compose(transforms)
+
 def save_model(model, processor, save_path: Path, metadata: Dict = None):
     """保存模型、处理器和元数据。"""
     save_path.mkdir(parents=True, exist_ok=True)

@@ -3,13 +3,7 @@
 V2版：将超参数搜索和最终训练的配置分离，结构更清晰。
 """
 
-import os
-import json
 from pathlib import Path
-import torch
-import random
-import numpy as np
-import albumentations as A
 
 # ==============================================================================
 # 1. 核心路径配置 (Core Path Configuration)
@@ -123,7 +117,7 @@ FINAL_TRAIN_CONFIG = {
 # 5. 系统与评估配置 (System & Evaluation Configuration)
 # ==============================================================================
 RANDOM_SEED = DATASET_CONFIG['random_seed']
-DEVICE = 'cpu'  # 'auto', 'cuda', 'cpu', 'mps'
+DEVICE = 'cpu'  # 全局设备配置: 'auto', 'cuda', 'cpu', 'mps'
 NUM_WORKERS = 0 # 设为0便于调试
 
 EVALUATION_CONFIG = {
@@ -132,76 +126,15 @@ EVALUATION_CONFIG = {
     'default_output_dir': OUTPUT_DIR / "evaluation",
     'batch_size': 2,
     'num_visualization_samples': 5,
-    'device': 'cpu',  # 'auto', 'cuda', 'cpu', 'mps'
+    # 'device' 已移除，统一使用全局 DEVICE 配置
     'figure_size': (16, 16),  # 4面板可视化的图像尺寸
     'visualization_dpi': 150,  # 可视化图像的DPI
 }
 
 # ==============================================================================
-# 6. 辅助函数 (Utility Functions)
+# 注意：所有辅助函数已移至 utils.py
+# config.py 现在只包含配置参数
 # ==============================================================================
-def get_augmentation_transform():
-    """获取数据增强变换，基于配置文件"""
-    transforms = []
-    if AUGMENTATION_CONFIG.get('horizontal_flip'):
-        transforms.append(A.HorizontalFlip(p=0.5))
-    if AUGMENTATION_CONFIG.get('vertical_flip'):
-        transforms.append(A.VerticalFlip(p=0.5))
-    if 'rotation_range' in AUGMENTATION_CONFIG:
-        min_angle, max_angle = AUGMENTATION_CONFIG['rotation_range']
-        transforms.append(A.Rotate(limit=(min_angle, max_angle), p=0.5))
-    if 'brightness_limit' in AUGMENTATION_CONFIG:
-        transforms.append(A.RandomBrightnessContrast(
-            brightness_limit=AUGMENTATION_CONFIG['brightness_limit'],
-            contrast_limit=AUGMENTATION_CONFIG.get('contrast_limit', 0.2),
-            p=0.5
-        ))
-    return A.Compose(transforms)
-
-def get_hyperparameter_from_trial(trial, param_name):
-    """从Optuna trial中获取超参数"""
-    param_config = SEARCH_CONFIG['space'][param_name]
-    if param_config['type'] == 'loguniform':
-        return trial.suggest_float(param_name, param_config['low'], param_config['high'], log=True)
-    elif param_config['type'] == 'uniform':
-        return trial.suggest_float(param_name, param_config['low'], param_config['high'])
-    elif param_config['type'] == 'categorical':
-        return trial.suggest_categorical(param_name, param_config['choices'])
-    raise ValueError(f"Unknown parameter type: {param_config['type']}")
-
-def set_seed(seed=RANDOM_SEED):
-    """设置随机种子以确保可重现性"""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(seed)
-
-def ensure_dirs():
-    """确保所有必要的目录存在"""
-    dirs_to_create = [
-        DATA_DIR, MODELS_DIR, OUTPUT_DIR,
-        FINETUNED_MODEL_DIR, HYPERPARAMETER_SEARCH_DIR
-    ]
-    for dir_path in dirs_to_create:
-        dir_path.mkdir(parents=True, exist_ok=True)
-
-def get_device():
-    """获取可用的设备"""
-    if DEVICE == 'auto':
-        if torch.cuda.is_available():
-            return torch.device("cuda")
-        if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
-            return torch.device("mps")
-        return torch.device("cpu")
-    return torch.device(DEVICE)
-
-def save_config(config_dict, filename):
-    """保存配置到JSON文件"""
-    output_path = Path(filename)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(output_path, 'w') as f:
-        json.dump(config_dict, f, indent=4)
 
 if __name__ == "__main__":
     print("✅ config.py: 配置文件加载成功。")

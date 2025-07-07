@@ -28,7 +28,8 @@ from utils import (
     create_data_loader, 
     load_model, 
     calculate_iou,
-    FineTuneDataset
+    FineTuneDataset,
+    get_device
 )
 
 def parse_args() -> argparse.Namespace:
@@ -51,21 +52,19 @@ def parse_args() -> argparse.Namespace:
                         default=EVALUATION_CONFIG['num_visualization_samples'],
                         help='Number of samples to visualize.')
     parser.add_argument('--device', type=str, 
-                        default=EVALUATION_CONFIG['device'],
+                        default=DEVICE,
                         help='Computation device (auto/cpu/cuda/mps).')
     
     return parser.parse_args()
 
 def setup_device(device_arg: str) -> torch.device:
     """Sets up the computation device."""
-    if device_arg == 'auto':
-        if torch.cuda.is_available():
-            device = torch.device('cuda')
-        elif torch.backends.mps.is_available():
-            device = torch.device('mps')
-        else:
-            device = torch.device('cpu')
+    # 使用 utils.py 中的 get_device 函数
+    # 如果用户没有指定设备，使用全局配置
+    if device_arg == DEVICE:
+        device = get_device()
     else:
+        # 如果用户指定了特定设备，尊重用户的选择
         device = torch.device(device_arg)
     
     print(f"Using device: {device}")
