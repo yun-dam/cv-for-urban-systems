@@ -4,22 +4,22 @@ import tifffile
 from tqdm import tqdm
 from pathlib import Path
 
-# 添加项目根目录到Python路径
+# Add project root directory to Python path
 sys.path.append(str(Path(__file__).parent.parent))
 from config import *
 
 # ==============================================================================
-# Configuration - 使用config.py中的配置
+# Configuration - Using configuration from config.py
 # ==============================================================================
-# 使用config.py中定义的路径
+# Use paths defined in config.py
 ORIGINAL_IMAGE_DIR = str(ORIGINAL_DIR / "top")
 ORIGINAL_LABEL_DIR = str(ORIGINAL_DIR / "ground_truth")
 
-# 输出目录
+# Output directories
 CROPPED_IMAGE_DIR = str(ORIGINAL_DIR / "top_cropped_512")
 CROPPED_LABEL_DIR = str(ORIGINAL_DIR / "ground_truth_cropped_512")
 
-# 从config.py获取图像处理参数
+# Get image processing parameters from config.py
 PATCH_SIZE = CROP_SIZE
 STRIDE = CROP_SIZE  # No overlap if equal to PATCH_SIZE
 
