@@ -8,18 +8,18 @@ from PIL import Image
 from tqdm import tqdm
 from pathlib import Path
 
-# 添加项目根目录到Python路径
+# Add project root directory to Python path
 sys.path.append(str(Path(__file__).parent.parent))
 from config import *
 
 # ==============================================================================
-# Configuration - 使用config.py中的配置
+# Configuration - Using configuration from config.py
 # ==============================================================================
-# 使用config.py中定义的路径
+# Use paths defined in config.py
 CROPPED_IMAGE_DIR = str(ORIGINAL_DIR / "top_cropped_512")
 CROPPED_LABEL_DIR = str(ORIGINAL_DIR / "ground_truth_cropped_512")
 
-# 输出目录 - 使用config.py中的配置
+# Output directories - Using configuration from config.py
 BASE_OUTPUT_DIR = str(FINETUNE_DATA_DIR)
 FINETUNE_POOL_IMG_DIR = str(FINETUNE_DATA_DIR / "finetune_pool" / "images")
 FINETUNE_POOL_MASK_DIR = str(FINETUNE_DATA_DIR / "finetune_pool" / "masks")
@@ -27,11 +27,11 @@ TEST_IMG_DIR = str(FINETUNE_DATA_DIR / "test/images")
 TEST_LABEL_DIR = str(FINETUNE_DATA_DIR / "test/labels")
 TEST_MASK_DIR = str(FINETUNE_DATA_DIR / "test/masks")
 
-# 数据集分割参数 - 使用config.py中的配置
+# Dataset split parameters - Using configuration from config.py
 NUM_FINETUNE_POOL = DATASET_CONFIG['finetune_pool_size']
 RANDOM_SEED = DATASET_CONFIG['random_seed']
 
-# 类别和颜色定义 - 使用config.py中的配置
+# Class and color definitions - Using configuration from config.py
 GT_COLOR_VALUES = CLASS_COLORS_BGR
 CLASSES = URBAN_CLASSES
 
