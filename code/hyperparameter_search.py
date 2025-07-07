@@ -1,8 +1,3 @@
-"""
-超参数搜索脚本 - Stanford UGVR CV项目
-使用Optuna框架进行超参数优化，基于交叉验证的结果
-"""
-
 import os
 import torch
 import numpy as np

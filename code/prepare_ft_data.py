@@ -16,18 +16,19 @@ from config import *
 # Configuration - 使用config.py中的配置
 # ==============================================================================
 # 使用config.py中定义的路径
-CROPPED_IMAGE_DIR = str(VAIHINGEN_IMAGES_DIR)
-CROPPED_LABEL_DIR = str(VAIHINGEN_LABELS_DIR)
+CROPPED_IMAGE_DIR = str(ORIGINAL_DIR / "top_cropped_512")
+CROPPED_LABEL_DIR = str(ORIGINAL_DIR / "ground_truth_cropped_512")
 
 # 输出目录 - 使用config.py中的配置
 BASE_OUTPUT_DIR = str(FINETUNE_DATA_DIR)
-FINETUNE_POOL_IMG_DIR = str(ORIGINAL_IMG_DIR)
-FINETUNE_POOL_MASK_DIR = str(ORIGINAL_MASK_DIR)
+FINETUNE_POOL_IMG_DIR = str(FINETUNE_DATA_DIR / "finetune_pool" / "images")
+FINETUNE_POOL_MASK_DIR = str(FINETUNE_DATA_DIR / "finetune_pool" / "masks")
 TEST_IMG_DIR = str(FINETUNE_DATA_DIR / "test/images")
 TEST_LABEL_DIR = str(FINETUNE_DATA_DIR / "test/labels")
+TEST_MASK_DIR = str(FINETUNE_DATA_DIR / "test/masks")
 
 # 数据集分割参数 - 使用config.py中的配置
-NUM_FINETUNE_POOL = DATASET_CONFIG['few_shot_pool_size']
+NUM_FINETUNE_POOL = DATASET_CONFIG['finetune_pool_size']
 RANDOM_SEED = DATASET_CONFIG['random_seed']
 
 # 类别和颜色定义 - 使用config.py中的配置
@@ -41,12 +42,12 @@ def prepare_data():
     """
     1. Splits cropped data into a 'finetune_pool' (for later train/val split) and a 'test' set.
     2. For the 'finetune_pool', it generates binary masks for each class.
-    3. For the 'test' set, it copies the original images and labels.
+    3. For the 'test' set, it copies the original images and labels, and also generates binary masks for each class.
     """
     print("Start preparing fine-tuning data...")
     
     # Create all output directories
-    for path in [FINETUNE_POOL_IMG_DIR, FINETUNE_POOL_MASK_DIR, TEST_IMG_DIR, TEST_LABEL_DIR]:
+    for path in [FINETUNE_POOL_IMG_DIR, FINETUNE_POOL_MASK_DIR, TEST_IMG_DIR, TEST_LABEL_DIR, TEST_MASK_DIR]:
         os.makedirs(path, exist_ok=True)
 
     all_files = sorted([f for f in os.listdir(CROPPED_IMAGE_DIR) if f.endswith(".tif")])
@@ -81,14 +82,31 @@ def prepare_data():
             mask_img.save(os.path.join(FINETUNE_POOL_MASK_DIR, mask_filename))
 
     # --- Process test set ---
-    print("\nProcessing Test Set (copying files only)...")
+    print("\nProcessing Test Set (copying files and generating masks)...")
     for filename in tqdm(test_files, desc="Processing Test Set"):
+        # 1. Copy image file
         shutil.copy(os.path.join(CROPPED_IMAGE_DIR, filename), os.path.join(TEST_IMG_DIR, filename))
+        
+        # 2. Copy label file
         shutil.copy(os.path.join(CROPPED_LABEL_DIR, filename), os.path.join(TEST_LABEL_DIR, filename))
+        
+        # 3. Create and save binary masks
+        label_path = os.path.join(CROPPED_LABEL_DIR, filename)
+        label_img = tifffile.imread(label_path)
+        
+        base_name = Path(filename).stem
+        for class_name, color in GT_COLOR_VALUES.items():
+            mask = np.all(label_img == np.array(color), axis=-1)
+            mask_img = Image.fromarray((mask * 255).astype(np.uint8))
+            
+            # Replace spaces in class name with underscores for valid filenames
+            safe_class_name = class_name.replace(" ", "_").replace("/", "_")
+            mask_filename = f"{base_name}_{safe_class_name}.png"
+            mask_img.save(os.path.join(TEST_MASK_DIR, mask_filename))
 
     print("\n✅ Data preparation completed!")
     print(f"Finetune pool data (images and masks) created in: {Path(FINETUNE_POOL_IMG_DIR).parent}")
-    print(f"Test data created in: {Path(TEST_IMG_DIR).parent}")
+    print(f"Test data (images, labels and masks) created in: {Path(TEST_IMG_DIR).parent}")
 
 if __name__ == "__main__":
     prepare_data()

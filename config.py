@@ -19,14 +19,14 @@ DATA_DIR = PROJECT_ROOT / "data"
 MODELS_DIR = PROJECT_ROOT / "models"
 OUTPUT_DIR = PROJECT_ROOT / "output"
 
-VAIHINGEN_DIR = DATA_DIR / "Vaihingen"
+ORIGINAL_DIR = DATA_DIR / "Vaihingen"
+# CROPPED_IMAGES_DIR = ORIGINAL_DIR / "top_cropped_512"
+# CROPPED_LABELS_DIR = ORIGINAL_DIR / "ground_truth_cropped_512"
 
 
-VAIHINGEN_IMAGES_DIR = VAIHINGEN_DIR / "top_cropped_512"
-VAIHINGEN_LABELS_DIR = VAIHINGEN_DIR / "ground_truth_cropped_512"
-FINETUNE_DATA_DIR = VAIHINGEN_DIR / "finetune_data"
-ORIGINAL_IMG_DIR = FINETUNE_DATA_DIR / "finetune_pool" / "images"
-ORIGINAL_MASK_DIR = FINETUNE_DATA_DIR / "finetune_pool" / "masks"
+FINETUNE_DATA_DIR = ORIGINAL_DIR / "finetune_data"
+# FINETUNE_POOL_IMG_DIR = FINETUNE_DATA_DIR / "finetune_pool" / "images"
+# FINETUNE_POOL_MASK_DIR = FINETUNE_DATA_DIR / "finetune_pool" / "masks"
 
 FINETUNED_MODEL_DIR = MODELS_DIR / "clipseg_finetuned"
 HYPERPARAMETER_SEARCH_DIR = MODELS_DIR / "hyperparameter_search"
@@ -55,21 +55,31 @@ CLASS_COLORS_BGR = {
     'background': [255, 0, 0]
 }
 
+# For visualization purposes (RGB format for Matplotlib)
+SEGMENTATION_COLORS_RGB = {
+    "impervious surface": (255, 255, 255),  # White
+    "building":           (0, 0, 255),      # Blue
+    "low vegetation":     (0, 255, 255),    # Cyan
+    "tree":               (0, 255, 0),      # Green
+    "car":                (255, 255, 0),    # Yellow
+    "background":         (255, 0, 0)       # Red
+}
+
 # 数据集参数
 DATASET_CONFIG = {
-    'few_shot_pool_size': 4,  # LAPTOP: 4 | SERVER: 20 (原始图片数量)
+    'finetune_pool_size': 4,  # LAPTOP: 4 | SERVER: 20 (原始图片数量)
     'n_cv_folds': 2,          # LAPTOP: 2 | SERVER: 5 (交叉验证fold数)
     'random_seed': 42         # 随机种子
 }
 
 # 数据增强参数
 AUGMENTATION_CONFIG = {
-    'num_augmentations_per_image': 3,  # LAPTOP: 3 | SERVER: 5
-    'horizontal_flip': True,
-    'vertical_flip': True,
-    'rotation_range': (-30, 30),
-    'brightness_limit': 0.1,
-    'contrast_limit': 0.1,
+    'num_augmentations_per_image': 2,  # LAPTOP: 3 | SERVER: 5
+    # 'horizontal_flip': True,
+    # 'vertical_flip': True,
+    # 'rotation_range': (-30, 30),
+    # 'brightness_limit': 0.1,
+    # 'contrast_limit': 0.1,
 }
 
 # ==============================================================================
@@ -118,10 +128,13 @@ NUM_WORKERS = 0 # 设为0便于调试
 
 EVALUATION_CONFIG = {
     'default_model_path': FINETUNED_MODEL_DIR / "best_model",
-    'default_test_data': VAIHINGEN_DIR / "top_cropped_512",
+    'default_test_data': FINETUNE_DATA_DIR / "test" / "images",
     'default_output_dir': OUTPUT_DIR / "evaluation",
     'batch_size': 2,
     'num_visualization_samples': 5,
+    'device': 'cpu',  # 'auto', 'cuda', 'cpu', 'mps'
+    'figure_size': (16, 16),  # 4面板可视化的图像尺寸
+    'visualization_dpi': 150,  # 可视化图像的DPI
 }
 
 # ==============================================================================

@@ -8,6 +8,7 @@ from tqdm import tqdm
 from sklearn.model_selection import KFold
 from pathlib import Path
 from PIL import Image
+import albumentations as A
 
 # ==============================================================================
 # 脚本核心配置
@@ -28,8 +29,10 @@ from config import *
 # 从 config.py 加载配置
 # ==============================================================================
 # 输入目录
-POOL_IMG_DIR = ORIGINAL_IMG_DIR
-POOL_MASK_DIR = ORIGINAL_MASK_DIR
+FINETUNE_POOL_IMG_DIR = FINETUNE_DATA_DIR / "finetune_pool" / "images"
+FINETUNE_POOL_MASK_DIR = FINETUNE_DATA_DIR / "finetune_pool" / "masks"
+# POOL_IMG_DIR = ORIGINAL_IMG_DIR
+# POOL_MASK_DIR = ORIGINAL_MASK_DIR
 
 # 输出目录
 BASE_OUTPUT_DIR = FINETUNE_DATA_DIR / "cv_prepared_data"
@@ -42,8 +45,40 @@ N_SPLITS = DATASET_CONFIG['n_cv_folds']
 RANDOM_SEED = DATASET_CONFIG['random_seed']
 CLASSES = [cls.replace(' ', '_').replace('/', '_') for cls in URBAN_CLASSES]
 
-# 获取数据增强变换管道
-transform = get_augmentation_transform()
+# ==============================================================================
+# 数据增强管道 (Albumentations)
+# ==============================================================================
+# 1) 几何变换
+geom_transforms = [
+    A.HorizontalFlip(p=0.5),
+    A.VerticalFlip(p=0.3),
+    A.ShiftScaleRotate(
+        shift_limit=0.1,      # 最大位移: 10%
+        scale_limit=0.2,      # 最大缩放: 20%
+        rotate_limit=25,      # 最大旋转: +/- 25度
+        border_mode=cv2.BORDER_CONSTANT,
+        value=0,
+        mask_value=0,
+        p=0.7
+    ),
+    # 如果图像尺寸 >= 512，应用随机裁剪
+    A.RandomCrop(height=512, width=512, p=0.5),
+]
+
+# 2) 光度变换
+photo_transforms = [
+    A.RandomBrightnessContrast(brightness_limit=0.3, contrast_limit=0.3, p=0.7),
+    A.HueSaturationValue(hue_shift_limit=15, sat_shift_limit=25, val_shift_limit=15, p=0.5),
+    A.RGBShift(r_shift_limit=20, g_shift_limit=20, b_shift_limit=20, p=0.5),
+    A.GaussNoise(var_limit=(10.0, 50.0), p=0.3),
+    A.GaussianBlur(blur_limit=3, p=0.3),
+]
+
+# 组合：先几何变换，后光度变换
+transform = A.Compose(
+    geom_transforms + photo_transforms,
+    additional_targets={f"mask{i}": "mask" for i in range(len(CLASSES))}
+)
 
 # ==============================================================================
 # 核心处理函数
@@ -96,15 +131,14 @@ def process_image_set(file_list: list, input_img_dir: Path, input_mask_dir: Path
         if should_augment:
             # N_AUG_PER_IMAGE 包含原始图像，所以我们生成 N-1 个增强版本
             for aug_idx in range(N_AUG_PER_IMAGE - 1):
-                # 准备增强目标
-                aug_targets = {"image": image_np}
-                for i in range(len(CLASSES)):
-                    aug_targets[f"mask{i}"] = masks_np[i]
-
                 # 应用增强
-                augmented = transform(**aug_targets)
-                aug_image = augmented["image"]
-                aug_masks = [augmented[f"mask{i}"] for i in range(len(CLASSES))]
+                transformed = transform(
+                    image=image_np,
+                    **{f"mask{i}": masks_np[i] for i in range(len(CLASSES))}
+                )
+                
+                aug_image = transformed["image"]
+                aug_masks = [transformed[f"mask{i}"] for i in range(len(CLASSES))]
 
                 # 保存增强后的图片和掩码
                 Image.fromarray(aug_image).save(output_img_dir / f"{img_stem}_aug{aug_idx:02d}.tif")
@@ -133,9 +167,9 @@ def main():
         shutil.rmtree(BASE_OUTPUT_DIR)
 
     # 加载原始图片文件列表
-    image_files = np.array(sorted([f.name for f in POOL_IMG_DIR.glob('*.tif')]))
+    image_files = np.array(sorted([f.name for f in FINETUNE_POOL_IMG_DIR.glob('*.tif')]))
     if len(image_files) == 0:
-        raise FileNotFoundError(f"在 {POOL_IMG_DIR} 中未找到任何 .tif 图片文件。")
+        raise FileNotFoundError(f"在 {FINETUNE_POOL_IMG_DIR} 中未找到任何 .tif 图片文件。")
     print(f"🏞️ 找到 {len(image_files)} 张原始图片用于处理。")
 
     # --- 任务 1: 创建 K-Fold 交叉验证数据集 ---
@@ -157,12 +191,12 @@ def main():
         val_output_mask_dir = fold_dir / "val/masks"
 
         # 处理训练集（总是增强）
-        process_image_set(train_files, POOL_IMG_DIR, POOL_MASK_DIR,
+        process_image_set(train_files, FINETUNE_POOL_IMG_DIR, FINETUNE_POOL_MASK_DIR,
                           train_output_img_dir, train_output_mask_dir,
                           should_augment=True, desc=f"Fold {fold_num} [训练集]")
 
         # 处理验证集（根据标志决定是否增强）
-        process_image_set(val_files, POOL_IMG_DIR, POOL_MASK_DIR,
+        process_image_set(val_files, FINETUNE_POOL_IMG_DIR, FINETUNE_POOL_MASK_DIR,
                           val_output_img_dir, val_output_mask_dir,
                           should_augment=AUGMENT_VALIDATION_SET, desc=f"Fold {fold_num} [验证集]")
 
@@ -172,7 +206,7 @@ def main():
     final_train_mask_dir = ALL_AUGMENTED_DIR / 'masks'
 
     # 处理所有图片（总是增强）
-    process_image_set(image_files, POOL_IMG_DIR, POOL_MASK_DIR,
+    process_image_set(image_files, FINETUNE_POOL_IMG_DIR, FINETUNE_POOL_MASK_DIR,
                       final_train_img_dir, final_train_mask_dir,
                       should_augment=True, desc="全量数据增强")
 

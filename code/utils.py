@@ -57,7 +57,8 @@ class FineTuneDataset(Dataset):
             "pixel_values": inputs.pixel_values.squeeze(0),
             "input_ids": inputs.input_ids.squeeze(0),
             "attention_mask": inputs.attention_mask.squeeze(0),
-            "labels": mask_tensor
+            "labels": mask_tensor,
+            "class_idx": cls_idx
         }
 
 # ==============================================================================
@@ -69,7 +70,8 @@ def collate_fn(batch, processor):
     labels = torch.stack([item["labels"] for item in batch])
     input_ids = pad_sequence([item["input_ids"] for item in batch], batch_first=True, padding_value=processor.tokenizer.pad_token_id)
     attention_mask = pad_sequence([item["attention_mask"] for item in batch], batch_first=True, padding_value=0)
-    return {"pixel_values": pixel_values, "input_ids": input_ids, "attention_mask": attention_mask, "labels": labels}
+    class_indices = torch.tensor([item["class_idx"] for item in batch], dtype=torch.long)
+    return {"pixel_values": pixel_values, "input_ids": input_ids, "attention_mask": attention_mask, "labels": labels, "class_indices": class_indices}
 
 def create_data_loader(image_paths: List[str], mask_dir: str, classes: List[str], processor, batch_size: int, shuffle: bool = True) -> DataLoader:
     """创建数据加载器"""
@@ -266,3 +268,32 @@ def save_training_log(logger, save_path):
 def get_current_lr(optimizer):
     """获取当前学习率"""
     return optimizer.param_groups[0]['lr']
+
+def load_model(model_path: Path, device):
+    """加载训练好的模型、处理器和元数据
+    
+    Args:
+        model_path: 模型目录路径
+        device: 计算设备
+        
+    Returns:
+        model: 加载的模型
+        processor: CLIPSeg处理器
+        metadata: 训练元数据（如果存在）
+    """
+    # 加载处理器
+    processor = CLIPSegProcessor.from_pretrained(model_path)
+    
+    # 加载模型
+    model = CLIPSegForImageSegmentation.from_pretrained(model_path)
+    model.to(device)
+    model.eval()
+    
+    # 尝试加载元数据
+    metadata = None
+    metadata_path = model_path / "training_metadata.json"
+    if metadata_path.exists():
+        with open(metadata_path, 'r') as f:
+            metadata = json.load(f)
+    
+    return model, processor, metadata

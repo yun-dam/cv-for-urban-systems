@@ -1,8 +1,3 @@
-"""
-最终模型训练脚本 - Stanford UGVR CV项目
-使用超参数搜索得到的最佳参数，在全量增强数据上训练最终模型
-"""
-
 import os
 from glob import glob
 from transformers import CLIPSegProcessor

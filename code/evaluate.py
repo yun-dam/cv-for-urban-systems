@@ -1,14 +1,14 @@
-"""
-独立模型评估脚本 - Stanford UGVR CV项目
-用于评估训练好的CLIPSeg模型在测试集上的性能
-"""
+
 
 import os
 import sys
 import json
 import argparse
+import tifffile
+import random
 from pathlib import Path
 from typing import Dict, List, Tuple
+
 import numpy as np
 import pandas as pd
 from PIL import Image
@@ -16,49 +16,48 @@ import torch
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
 import seaborn as sns
-from sklearn.metrics import confusion_matrix, classification_report
+from sklearn.metrics import confusion_matrix
 from tqdm import tqdm
+from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
 
-# 添加项目根目录到Python路径
+# Add project root to Python path
 sys.path.append(str(Path(__file__).parent.parent))
 
 from config import *
 from utils import (
-    FineTuneDataset, 
     create_data_loader, 
     load_model, 
     calculate_iou,
-    evaluate_model
+    FineTuneDataset
 )
 
-def parse_args():
-    """解析命令行参数（使用config.py中的默认值）"""
-    parser = argparse.ArgumentParser(description='CLIPSeg模型评估脚本')
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description='CLIPSeg Model Evaluation Script')
     
-    # 使用配置文件中的默认值
     parser.add_argument('--model_path', type=str, 
                         default=str(EVALUATION_CONFIG['default_model_path']),
-                        help='训练好的模型路径')
-    parser.add_argument('--test_data', type=str, 
+                        help='Path to the fine-tuned model directory.')
+    parser.add_argument('--test_data_dir', type=str, 
                         default=str(EVALUATION_CONFIG['default_test_data']),
-                        help='测试数据目录路径')
+                        help='Path to the test data directory.')
     parser.add_argument('--output_dir', type=str, 
                         default=str(EVALUATION_CONFIG['default_output_dir']),
-                        help='评估结果输出目录')
+                        help='Directory to save evaluation results.')
     parser.add_argument('--batch_size', type=int, 
                         default=EVALUATION_CONFIG['batch_size'],
-                        help='批处理大小')
+                        help='Batch size for evaluation.')
     parser.add_argument('--num_samples', type=int, 
                         default=EVALUATION_CONFIG['num_visualization_samples'],
-                        help='可视化样本数量')
+                        help='Number of samples to visualize.')
     parser.add_argument('--device', type=str, 
                         default=EVALUATION_CONFIG['device'],
-                        help='计算设备 (auto/cpu/cuda/mps)')
+                        help='Computation device (auto/cpu/cuda/mps).')
     
     return parser.parse_args()
 
 def setup_device(device_arg: str) -> torch.device:
-    """设置计算设备"""
+    """Sets up the computation device."""
     if device_arg == 'auto':
         if torch.cuda.is_available():
             device = torch.device('cuda')
@@ -69,337 +68,248 @@ def setup_device(device_arg: str) -> torch.device:
     else:
         device = torch.device(device_arg)
     
-    print(f"使用设备: {device}")
+    print(f"Using device: {device}")
     return device
 
-def load_test_data(test_data_dir: str, batch_size: int, processor) -> Tuple[DataLoader, int]:
-    """加载测试数据"""
-    test_images = sorted(Path(test_data_dir).glob('*.tif'))
-    test_images = [str(img) for img in test_images]
-    
-    if not test_images:
-        raise ValueError(f"在 {test_data_dir} 中未找到测试图像")
-    
-    # 创建数据加载器
-    test_loader = create_data_loader(
-        test_images, 
-        str(VAIHINGEN_LABELS_DIR), 
-        URBAN_CLASSES, 
-        processor,
-        batch_size,
-        shuffle=False
-    )
-    
-    print(f"加载了 {len(test_images)} 张测试图像")
-    return test_loader, len(test_images)
+def get_ground_truth_masks(label_path: Path, classes: List[str], colors: Dict[str, Tuple[int, int, int]]) -> Dict[str, np.ndarray]:
+    """Generates a dictionary of ground truth masks from a label file."""
+    label_img_bgr = tifffile.imread(label_path)
+    h, w, _ = label_img_bgr.shape
+    mask_dict = {cls: np.zeros((h, w), dtype=np.uint8) for cls in classes}
 
-def evaluate_detailed_performance(model, test_loader, device, classes) -> Dict:
-    """详细性能评估"""
+    for class_name, bgr_color in colors.items():
+        # Find the prompt name corresponding to the official class name
+        prompt_name = class_name.lower().replace('_', ' ')
+        if prompt_name in mask_dict:
+            mask = np.all(label_img_bgr == np.array(bgr_color), axis=-1)
+            mask_dict[prompt_name] = (mask * 255).astype(np.uint8)
+            
+    return mask_dict
+
+def evaluate_model_performance(model, processor, test_loader, device, classes) -> Dict:
+    """Evaluates a single model's performance and returns detailed results."""
     model.eval()
-    all_predictions = []
-    all_targets = []
     class_ious = {cls: [] for cls in classes}
     
-    print("开始详细评估...")
-    
     with torch.no_grad():
-        for batch in tqdm(test_loader, desc="评估进度"):
-            # 模型预测
+        for batch in tqdm(test_loader, desc=f"Evaluating {Path(model.name_or_path).name}", leave=False):
             outputs = model(
                 pixel_values=batch["pixel_values"].to(device),
                 input_ids=batch["input_ids"].to(device),
                 attention_mask=batch["attention_mask"].to(device)
             )
-            logits = outputs.logits
+            logits = outputs.logits.unsqueeze(1)
             labels = batch["labels"].to(device)
-            
-            # 确保logits和labels的维度匹配
-            if logits.dim() == 3 and labels.dim() == 4:
-                logits = logits.unsqueeze(1)
-            elif logits.dim() == 4 and labels.dim() == 4:
-                pass  # 维度已经匹配
-            else:
-                print(f"警告: logits形状={logits.shape}, labels形状={labels.shape}")
-                
-            predictions = torch.sigmoid(logits)
-            
-            # 转换为numpy数组
-            pred_np = predictions.cpu().numpy()
-            target_np = labels.cpu().numpy()
-            
-            # 计算每个类别的IoU
-            for i, cls in enumerate(classes):
-                pred_binary = (pred_np[:, i] > 0.5).astype(int)
-                target_binary = target_np[:, i].astype(int)
-                
-                # 计算IoU
-                iou = calculate_iou(pred_binary, target_binary)
-                class_ious[cls].append(iou)
-                
-                # 收集预测和目标用于混淆矩阵
-                all_predictions.extend(pred_binary.flatten())
-                all_targets.extend(target_binary.flatten())
-    
-    # 计算平均IoU
-    mean_ious = {}
-    for cls in classes:
-        mean_ious[cls] = np.mean(class_ious[cls]) if class_ious[cls] else 0.0
-    
-    # 总体mIoU
+            class_indices = batch["class_indices"].cpu().numpy()
+
+            predictions = torch.sigmoid(logits).cpu().numpy()
+            targets = labels.cpu().numpy()
+
+            for i in range(predictions.shape[0]):
+                class_idx = class_indices[i]
+                class_name = classes[class_idx]
+                iou = calculate_iou(predictions[i, 0], targets[i, 0])
+                class_ious[class_name].append(iou)
+
+    mean_ious = {cls: np.mean(ious) if ious else 0.0 for cls, ious in class_ious.items()}
     mean_iou = np.mean(list(mean_ious.values()))
     
-    results = {
-        'class_ious': mean_ious,
-        'mean_iou': mean_iou,
-        'predictions': all_predictions,
-        'targets': all_targets
-    }
-    
-    return results
+    return {'class_ious': mean_ious, 'mean_iou': mean_iou}
 
-def generate_performance_report(results: Dict, classes: List[str], output_dir: Path):
-    """生成性能报告"""
+def generate_comparison_report(results: Dict, output_dir: Path):
+    """Generates and saves a comparative performance report."""
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # 1. IoU结果表格
-    iou_df = pd.DataFrame([
-        {'Class': cls, 'IoU': iou} 
-        for cls, iou in results['class_ious'].items()
-    ])
-    iou_df.loc[len(iou_df)] = {'Class': 'Mean', 'IoU': results['mean_iou']}
+    # Create a DataFrame for easy comparison
+    df_data = []
+    all_classes = sorted(results['finetuned']['class_ious'].keys())
     
-    # 保存IoU结果
-    iou_df.to_csv(output_dir / 'iou_results.csv', index=False)
+    for cls in all_classes:
+        ft_iou = results['finetuned']['class_ious'].get(cls, 0.0)
+        pt_iou = results['pretrained']['class_ious'].get(cls, 0.0)
+        improvement = ft_iou - pt_iou
+        df_data.append({'Class': cls, 'Finetuned_IoU': ft_iou, 'Pretrained_IoU': pt_iou, 'Improvement': improvement})
+        
+    # Add mean IoU
+    ft_miou = results['finetuned']['mean_iou']
+    pt_miou = results['pretrained']['mean_iou']
+    mean_improvement = ft_miou - pt_miou
+    df_data.append({'Class': 'Mean', 'Finetuned_IoU': ft_miou, 'Pretrained_IoU': pt_miou, 'Improvement': mean_improvement})
     
-    # 2. 混淆矩阵
-    cm = confusion_matrix(results['targets'], results['predictions'])
+    df = pd.DataFrame(df_data)
     
-    plt.figure(figsize=(8, 6))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
-    plt.title('混淆矩阵')
-    plt.ylabel('真实标签')
-    plt.xlabel('预测标签')
-    plt.tight_layout()
-    plt.savefig(output_dir / 'confusion_matrix.png', dpi=300)
-    plt.close()
-    
-    # 3. 类别性能可视化
-    plt.figure(figsize=(12, 8))
-    bars = plt.bar(results['class_ious'].keys(), results['class_ious'].values())
-    plt.axhline(y=results['mean_iou'], color='red', linestyle='--', 
-                label=f'Mean IoU: {results["mean_iou"]:.3f}')
-    plt.title('各类别IoU性能')
-    plt.ylabel('IoU分数')
-    plt.xlabel('类别')
-    plt.xticks(rotation=45, ha='right')
-    plt.legend()
-    plt.tight_layout()
-    plt.savefig(output_dir / 'class_performance.png', dpi=300)
-    plt.close()
-    
-    # 4. 详细报告
-    report = {
-        'evaluation_summary': {
-            'mean_iou': results['mean_iou'],
-            'class_ious': results['class_ious'],
-            'total_samples': len(results['targets'])
-        },
-        'evaluation_time': pd.Timestamp.now().isoformat()
-    }
-    
-    with open(output_dir / 'evaluation_report.json', 'w') as f:
-        json.dump(report, f, indent=2)
-    
-    return report
+    # Save to CSV
+    csv_path = output_dir / 'evaluation_summary.csv'
+    df.to_csv(csv_path, index=False, float_format='%.4f')
+    print(f"Comparative report saved to: {csv_path}")
 
-def visualize_predictions(model_path: str, test_data_dir: str, device, classes, 
-                         output_dir: Path, num_samples: int = 10):
-    """可视化预测结果 - 参考clipseg_run.py的4面板可视化方式"""
-    from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
-    import tifffile
-    
-    # 加载预训练和微调模型用于对比
-    # 加载预训练模型
-    processor_pretrained = CLIPSegProcessor.from_pretrained(PRETRAINED_MODEL)
-    model_pretrained = CLIPSegForImageSegmentation.from_pretrained(PRETRAINED_MODEL)
-    model_pretrained.to(device)
-    model_pretrained.eval()
-    
-    # 加载微调模型
-    processor_finetuned = CLIPSegProcessor.from_pretrained(model_path)
-    model_finetuned = CLIPSegForImageSegmentation.from_pretrained(model_path)
-    model_finetuned.to(device)
-    model_finetuned.eval()
-    
-    # 分割颜色映射
-    SEGMENTATION_COLORS_RGB = {
-        "impervious surface": (255, 255, 255),  # White
-        "building":           (0, 0, 255),      # Blue
-        "low vegetation":     (0, 255, 255),    # Cyan
-        "tree":               (0, 255, 0),      # Green
-        "car":                (255, 255, 0),    # Yellow
-        "background":         (255, 0, 0)       # Red
-    }
-    
-    # 获取测试图像
-    test_images = sorted(Path(test_data_dir).glob('*.tif'))
-    if len(test_images) > num_samples:
-        import random
-        random.seed(42)
-        test_images = random.sample(test_images, num_samples)
-    
+    # Save full results to JSON
+    json_path = output_dir / 'full_evaluation_results.json'
+    with open(json_path, 'w') as f:
+        json.dump(results, f, indent=2)
+    print(f"Full results saved to: {json_path}")
+
+def visualize_comparison(
+    finetuned_model, ft_processor, 
+    pretrained_model, pt_processor, 
+    test_data_dir: str, device, classes, 
+    output_dir: Path, num_samples: int
+):
+    """Visualizes a 4-panel comparison for a number of random samples."""
     vis_dir = output_dir / 'visualizations'
     vis_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"生成 {len(test_images)} 个可视化样本...")
-    
-    for i, image_path in enumerate(tqdm(test_images, desc="生成可视化")):
-        # 对应的标签文件
-        label_path = VAIHINGEN_LABELS_DIR / image_path.name
+    test_images = sorted(list(Path(test_data_dir).glob('*.tif')))
+    if len(test_images) > num_samples:
+        random.seed(RANDOM_SEED)
+        test_images = random.sample(test_images, num_samples)
+
+    print(f"Generating {len(test_images)} visualization samples...")
+
+    for image_path in tqdm(test_images, desc="Creating visualizations"):
+        label_path = FINETUNE_DATA_DIR / "test/labels" / image_path.name
+        if not label_path.exists():
+            print(f"Warning: Label for {image_path.name} not found. Skipping.")
+            continue
+
+        image = Image.open(image_path).convert("RGB")
+        images = [image] * len(classes)
         
-        if not Path(label_path).exists():
-            print(f"标签文件不存在: {label_path}")
-            continue
+        # Get ground truth masks
+        gt_masks = get_ground_truth_masks(label_path, classes, CLASS_COLORS_BGR)
+
+        # --- Inference and IoU calculation for both models ---
+        models = {
+            "Finetuned": (finetuned_model, ft_processor),
+            "Pretrained": (pretrained_model, pt_processor)
+        }
+        
+        segmentation_maps = {}
+        iou_texts = {}
+
+        for model_name, (model, processor) in models.items():
+            inputs = processor(images=images, text=classes, return_tensors="pt", padding=True)
+            inputs = {k: v.to(device) for k, v in inputs.items()}
             
-        try:
-            # 加载图像
-            image = Image.open(image_path).convert("RGB")
-            images = [image for _ in classes]
-            
-            # 预训练模型推理
-            inputs_pretrained = processor_pretrained(images=images, text=classes, return_tensors="pt", padding=True)
-            inputs_pretrained = {k: v.to(device) for k, v in inputs_pretrained.items()}
             with torch.no_grad():
-                outputs_pretrained = model_pretrained(**inputs_pretrained)
-            masks_pretrained = outputs_pretrained.logits.sigmoid().squeeze().cpu().numpy()
-            resized_masks_pretrained = [
-                np.array(Image.fromarray(m).resize(image.size, resample=Image.BILINEAR))
-                for m in masks_pretrained
-            ]
+                outputs = model(**inputs)
             
-            # 微调模型推理
-            inputs_finetuned = processor_finetuned(images=images, text=classes, return_tensors="pt", padding=True)
-            inputs_finetuned = {k: v.to(device) for k, v in inputs_finetuned.items()}
-            with torch.no_grad():
-                outputs_finetuned = model_finetuned(**inputs_finetuned)
-            masks_finetuned = outputs_finetuned.logits.sigmoid().squeeze().cpu().numpy()
-            resized_masks_finetuned = [
-                np.array(Image.fromarray(m).resize(image.size, resample=Image.BILINEAR))
-                for m in masks_finetuned
-            ]
+            masks = outputs.logits.sigmoid().cpu()
+            resized_masks = torch.nn.functional.interpolate(masks.unsqueeze(0), size=image.size[::-1], mode='bilinear', align_corners=False).squeeze(0)
             
-            # 生成分割图
-            color_map_rgb = np.array([SEGMENTATION_COLORS_RGB[prompt] for prompt in classes], dtype=np.uint8)
+            # Create segmentation map
+            pred_labels = resized_masks.argmax(dim=0)
+            color_map_rgb = np.array([SEGMENTATION_COLORS_RGB[c] for c in classes], dtype=np.uint8)
+            segmentation_maps[model_name] = color_map_rgb[pred_labels.numpy()]
+
+            # Calculate and format IoU text
+            iou_scores = {cls: calculate_iou(resized_masks[i].numpy(), gt_masks[cls]) for i, cls in enumerate(classes)}
+            iou_text = f"{model_name} IoU Scores:\n" + "\n".join([f"  - {c}: {s:.3f}" for c, s in iou_scores.items()])
+            iou_texts[model_name] = iou_text
+
+        # --- Create 4-panel plot ---
+        fig, axes = plt.subplots(2, 2, figsize=EVALUATION_CONFIG['figure_size'], dpi=EVALUATION_CONFIG['visualization_dpi'])
+        
+        axes[0, 0].imshow(image)
+        axes[0, 0].set_title(f"Original Image\n{image_path.name}", fontsize=10)
+        
+        axes[0, 1].imshow(segmentation_maps['Pretrained'])
+        axes[0, 1].set_title(iou_texts['Pretrained'], fontsize=8, loc='left')
+
+        axes[1, 0].imshow(segmentation_maps['Finetuned'])
+        axes[1, 0].set_title(iou_texts['Finetuned'], fontsize=8, loc='left')
+
+        axes[1, 1].imshow(tifffile.imread(label_path))
+        axes[1, 1].set_title("Ground Truth", fontsize=10)
+
+        for ax in axes.flat:
+            ax.axis("off")
             
-            # 预训练分割图
-            stacked_masks_pretrained = np.stack(resized_masks_pretrained, axis=0)
-            pred_labels_pretrained = np.argmax(stacked_masks_pretrained, axis=0)
-            segmentation_map_pretrained = color_map_rgb[pred_labels_pretrained]
-            
-            # 微调分割图
-            stacked_masks_finetuned = np.stack(resized_masks_finetuned, axis=0)
-            pred_labels_finetuned = np.argmax(stacked_masks_finetuned, axis=0)
-            segmentation_map_finetuned = color_map_rgb[pred_labels_finetuned]
-            
-            # 加载真实标签
-            gt_img_bgr = tifffile.imread(label_path)
-            
-            # 创建4面板可视化 - 使用配置中的设置
-            fig, axes = plt.subplots(2, 2, 
-                                   figsize=EVALUATION_CONFIG['figure_size'], 
-                                   dpi=EVALUATION_CONFIG['visualization_dpi'])
-            
-            # 原始图像
-            axes[0, 0].imshow(np.array(image))
-            axes[0, 0].set_title(f"Original Image\n{image_path.name}", fontsize=12)
-            axes[0, 0].axis("off")
-            
-            # 预训练模型输出
-            axes[0, 1].imshow(segmentation_map_pretrained)
-            axes[0, 1].set_title(f"Pretrained CLIPSeg Output", fontsize=12)
-            axes[0, 1].axis("off")
-            
-            # 微调模型输出
-            axes[1, 0].imshow(segmentation_map_finetuned)
-            axes[1, 0].set_title(f"Finetuned CLIPSeg Output", fontsize=12)
-            axes[1, 0].axis("off")
-            
-            # 真实标签
-            axes[1, 1].imshow(gt_img_bgr)
-            axes[1, 1].set_title("Ground Truth", fontsize=12)
-            axes[1, 1].axis("off")
-            
-            plt.tight_layout(pad=2.0)
-            save_path = vis_dir / f"{image_path.stem}_4panel_comparison.png"
-            plt.savefig(save_path, bbox_inches='tight')
-            plt.close(fig)
-            
-        except Exception as e:
-            print(f"处理图像 {image_path.name} 时发生错误: {e}")
-            continue
-    
-    print(f"可视化结果已保存到: {vis_dir}")
+        plt.tight_layout(pad=1.0)
+        save_path = vis_dir / f"{image_path.stem}_4panel_comparison.png"
+        plt.savefig(save_path, bbox_inches='tight')
+        plt.close(fig)
+
+    print(f"Visualizations saved to: {vis_dir}")
 
 def main():
-    """主函数"""
+    """Main function to run the evaluation."""
     args = parse_args()
     
-    # 显示配置信息
-    print("🔧 评估配置:")
-    print(f"  模型路径: {args.model_path}")
-    print(f"  测试数据: {args.test_data}")
-    print(f"  输出目录: {args.output_dir}")
-    print(f"  批处理大小: {args.batch_size}")
-    print(f"  可视化样本数: {args.num_samples}")
-    print()
+    print("🔧 Evaluation Configuration:")
+    print(f"  - Fine-tuned Model: {args.model_path}")
+    print(f"  - Pre-trained Model: {PRETRAINED_MODEL}")
+    print(f"  - Test Data: {args.test_data_dir}")
+    print(f"  - Output Dir: {args.output_dir}")
+    print(f"  - Batch Size: {args.batch_size}")
+    print(f"  - Visualization Samples: {args.num_samples}")
     
-    # 设置设备
     device = setup_device(args.device)
-    
-    # 创建输出目录
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    print(f"评估结果将保存到: {output_dir}")
-    
     try:
-        # 加载模型
-        print("加载模型...")
-        model, processor, metadata = load_model(Path(args.model_path), device)
+        # --- Load Models ---
+        print("\nLoading models...")
+        finetuned_model, ft_processor, _ = load_model(Path(args.model_path), device)
+        pretrained_model, pt_processor, _ = load_model(Path(PRETRAINED_MODEL), device)
+
+        # --- Load Data ---
+        print("Loading test data...")
+        # We use the fine-tuned processor for data loading, as it's compatible.
+        test_dataset = FineTuneDataset(
+            image_paths=sorted([str(p) for p in Path(args.test_data_dir).glob('*.tif')]),
+            mask_dir=str(FINETUNE_DATA_DIR / "test/masks"),
+            classes=URBAN_CLASSES,
+            processor=ft_processor
+        )
+        test_loader = DataLoader(
+            test_dataset,
+            batch_size=args.batch_size,
+            shuffle=False,
+            num_workers=NUM_WORKERS,
+            collate_fn=lambda b: ft_processor.collate_fn(b, ft_processor)
+        )
+        print(f"Loaded {len(test_dataset)} test samples.")
+
+        # --- Run Evaluation ---
+        print("\nStarting model performance evaluation...")
+        results = {}
+        results['finetuned'] = evaluate_model_performance(finetuned_model, ft_processor, test_loader, device, URBAN_CLASSES)
+        results['pretrained'] = evaluate_model_performance(pretrained_model, pt_processor, test_loader, device, URBAN_CLASSES)
         
-        # 加载测试数据
-        print("加载测试数据...")
-        test_loader, num_images = load_test_data(args.test_data, args.batch_size, processor)
+        # --- Generate Reports and Visuals ---
+        print("\nGenerating reports and visualizations...")
+        generate_comparison_report(results, output_dir)
+        visualize_comparison(
+            finetuned_model, ft_processor,
+            pretrained_model, pt_processor,
+            args.test_data_dir, device, URBAN_CLASSES,
+            output_dir, args.num_samples
+        )
         
-        # 详细性能评估
-        print("开始性能评估...")
-        results = evaluate_detailed_performance(model, test_loader, device, URBAN_CLASSES)
-        
-        # 生成报告
-        print("生成评估报告...")
-        report = generate_performance_report(results, URBAN_CLASSES, output_dir)
-        
-        # 可视化预测结果
-        print("生成可视化结果...")
-        visualize_predictions(args.model_path, args.test_data, device, URBAN_CLASSES, 
-                             output_dir, args.num_samples)
-        
-        # 打印结果摘要
         print("\n" + "="*50)
-        print("评估结果摘要:")
+        print("✅ Evaluation Summary (mIoU):")
+        print(f"  - Pretrained: {results['pretrained']['mean_iou']:.4f}")
+        print(f"  - Finetuned:  {results['finetuned']['mean_iou']:.4f}")
+        print(f"  - Improvement: {results['finetuned']['mean_iou'] - results['pretrained']['mean_iou']:+.4f}")
         print("="*50)
-        print(f"总体mIoU: {results['mean_iou']:.4f}")
-        print("\n各类别IoU:")
-        for cls, iou in results['class_ious'].items():
-            print(f"  {cls}: {iou:.4f}")
-        
-        print(f"\n详细结果已保存到: {output_dir}")
         
     except Exception as e:
-        print(f"评估过程中发生错误: {e}")
+        print(f"\n❌ An error occurred during evaluation: {e}")
         return 1
     
     return 0
 
 if __name__ == "__main__":
+    # A simple trick to make the collate_fn accessible to the DataLoader
+    CLIPSegProcessor.collate_fn = staticmethod(
+        lambda batch, processor: {
+            'pixel_values': torch.stack([item['pixel_values'] for item in batch]),
+            'labels': torch.stack([item['labels'] for item in batch]),
+            'input_ids': torch.nn.utils.rnn.pad_sequence([item['input_ids'] for item in batch], batch_first=True, padding_value=processor.tokenizer.pad_token_id),
+            'attention_mask': torch.nn.utils.rnn.pad_sequence([item['attention_mask'] for item in batch], batch_first=True, padding_value=0),
+            'class_indices': torch.tensor([item['class_idx'] for item in batch], dtype=torch.long)
+        }
+    )
     exit(main())
