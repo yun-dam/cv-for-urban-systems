@@ -85,10 +85,46 @@ def get_ground_truth_masks(label_path: Path, classes: List[str], colors: Dict[st
             
     return mask_dict
 
+def calculate_metrics(pred_mask, true_mask, threshold=0.5):
+    """Calculate multiple evaluation metrics for a single prediction."""
+    pred_binary = (pred_mask > threshold).astype(np.uint8)
+    true_binary = (true_mask > 0).astype(np.uint8)
+    
+    # True Positives, False Positives, False Negatives, True Negatives
+    tp = np.sum(pred_binary & true_binary)
+    fp = np.sum(pred_binary & ~true_binary)
+    fn = np.sum(~pred_binary & true_binary)
+    tn = np.sum(~pred_binary & ~true_binary)
+    
+    # IoU
+    iou = tp / (tp + fp + fn) if (tp + fp + fn) > 0 else 0.0
+    
+    # Precision
+    precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
+    
+    # Recall
+    recall = tp / (tp + fn) if (tp + fn) > 0 else 0.0
+    
+    # F1 Score
+    f1 = 2 * (precision * recall) / (precision + recall) if (precision + recall) > 0 else 0.0
+    
+    # Pixel Accuracy
+    pixel_acc = (tp + tn) / (tp + tn + fp + fn) if (tp + tn + fp + fn) > 0 else 0.0
+    
+    return {
+        'iou': iou,
+        'precision': precision,
+        'recall': recall,
+        'f1': f1,
+        'pixel_accuracy': pixel_acc
+    }
+
 def evaluate_model_performance(model, processor, test_loader, device, classes) -> Dict:
     """Evaluates a single model's performance and returns detailed results."""
     model.eval()
-    class_ious = {cls: [] for cls in classes}
+    # Initialize metric storage for each class
+    class_metrics = {cls: {'iou': [], 'precision': [], 'recall': [], 'f1': [], 'pixel_accuracy': []} 
+                     for cls in classes}
     
     with torch.no_grad():
         for batch in tqdm(test_loader, desc=f"Evaluating {Path(model.name_or_path).name}", leave=False):
@@ -107,46 +143,159 @@ def evaluate_model_performance(model, processor, test_loader, device, classes) -
             for i in range(predictions.shape[0]):
                 class_idx = class_indices[i]
                 class_name = classes[class_idx]
-                iou = calculate_iou(predictions[i, 0], targets[i, 0])
-                class_ious[class_name].append(iou)
+                
+                # Calculate all metrics
+                metrics = calculate_metrics(predictions[i, 0], targets[i, 0])
+                
+                # Store metrics
+                for metric_name, value in metrics.items():
+                    class_metrics[class_name][metric_name].append(value)
 
-    mean_ious = {cls: np.mean(ious) if ious else 0.0 for cls, ious in class_ious.items()}
-    mean_iou = np.mean(list(mean_ious.values()))
+    # Calculate mean values for each metric and class
+    results = {}
+    for metric_name in ['iou', 'precision', 'recall', 'f1', 'pixel_accuracy']:
+        class_values = {}
+        for cls in classes:
+            values = class_metrics[cls][metric_name]
+            class_values[cls] = np.mean(values) if values else 0.0
+        
+        results[f'class_{metric_name}s'] = class_values
+        results[f'mean_{metric_name}'] = np.mean(list(class_values.values()))
     
-    return {'class_ious': mean_ious, 'mean_iou': mean_iou}
+    return results
 
 def generate_comparison_report(results: Dict, output_dir: Path):
     """Generates and saves a comparative performance report."""
     output_dir.mkdir(parents=True, exist_ok=True)
     
-    # Create a DataFrame for easy comparison
-    df_data = []
+    # Create DataFrames for each metric
+    metrics = ['iou', 'precision', 'recall', 'f1', 'pixel_accuracy']
     all_classes = sorted(results['finetuned']['class_ious'].keys())
     
+    # Summary DataFrame with all metrics
+    summary_data = []
+    
     for cls in all_classes:
-        ft_iou = results['finetuned']['class_ious'].get(cls, 0.0)
-        pt_iou = results['pretrained']['class_ious'].get(cls, 0.0)
-        improvement = ft_iou - pt_iou
-        df_data.append({'Class': cls, 'Finetuned_IoU': ft_iou, 'Pretrained_IoU': pt_iou, 'Improvement': improvement})
+        row = {'Class': cls}
+        for metric in metrics:
+            ft_value = results['finetuned'][f'class_{metric}s'].get(cls, 0.0)
+            pt_value = results['pretrained'][f'class_{metric}s'].get(cls, 0.0)
+            improvement = ft_value - pt_value
+            
+            row[f'FT_{metric.upper()}'] = ft_value
+            row[f'PT_{metric.upper()}'] = pt_value
+            row[f'Δ_{metric.upper()}'] = improvement
         
-    # Add mean IoU
-    ft_miou = results['finetuned']['mean_iou']
-    pt_miou = results['pretrained']['mean_iou']
-    mean_improvement = ft_miou - pt_miou
-    df_data.append({'Class': 'Mean', 'Finetuned_IoU': ft_miou, 'Pretrained_IoU': pt_miou, 'Improvement': mean_improvement})
+        summary_data.append(row)
     
-    df = pd.DataFrame(df_data)
+    # Add mean values
+    mean_row = {'Class': 'Mean'}
+    for metric in metrics:
+        ft_mean = results['finetuned'][f'mean_{metric}']
+        pt_mean = results['pretrained'][f'mean_{metric}']
+        mean_improvement = ft_mean - pt_mean
+        
+        mean_row[f'FT_{metric.upper()}'] = ft_mean
+        mean_row[f'PT_{metric.upper()}'] = pt_mean
+        mean_row[f'Δ_{metric.upper()}'] = mean_improvement
     
-    # Save to CSV
-    csv_path = output_dir / 'evaluation_summary.csv'
-    df.to_csv(csv_path, index=False, float_format='%.4f')
-    print(f"Comparative report saved to: {csv_path}")
-
+    summary_data.append(mean_row)
+    
+    # Create and save comprehensive summary
+    summary_df = pd.DataFrame(summary_data)
+    summary_csv_path = output_dir / 'evaluation_summary_all_metrics.csv'
+    summary_df.to_csv(summary_csv_path, index=False, float_format='%.4f')
+    print(f"Comprehensive summary saved to: {summary_csv_path}")
+    
+    # Create metric-specific comparison tables
+    for metric in metrics:
+        metric_data = []
+        for cls in all_classes:
+            ft_value = results['finetuned'][f'class_{metric}s'].get(cls, 0.0)
+            pt_value = results['pretrained'][f'class_{metric}s'].get(cls, 0.0)
+            improvement = ft_value - pt_value
+            metric_data.append({
+                'Class': cls,
+                f'Finetuned_{metric.upper()}': ft_value,
+                f'Pretrained_{metric.upper()}': pt_value,
+                'Improvement': improvement
+            })
+        
+        # Add mean
+        ft_mean = results['finetuned'][f'mean_{metric}']
+        pt_mean = results['pretrained'][f'mean_{metric}']
+        metric_data.append({
+            'Class': 'Mean',
+            f'Finetuned_{metric.upper()}': ft_mean,
+            f'Pretrained_{metric.upper()}': pt_mean,
+            'Improvement': ft_mean - pt_mean
+        })
+        
+        metric_df = pd.DataFrame(metric_data)
+        metric_csv_path = output_dir / f'{metric}_comparison.csv'
+        metric_df.to_csv(metric_csv_path, index=False, float_format='%.4f')
+    
     # Save full results to JSON
     json_path = output_dir / 'full_evaluation_results.json'
     with open(json_path, 'w') as f:
         json.dump(results, f, indent=2)
     print(f"Full results saved to: {json_path}")
+    
+    # Create visualization plots for metrics
+    create_metric_comparison_plots(results, all_classes, metrics, output_dir)
+
+def create_metric_comparison_plots(results: Dict, classes: List[str], metrics: List[str], output_dir: Path):
+    """Create bar plots comparing metrics between pretrained and finetuned models."""
+    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
+    axes = axes.flatten()
+    
+    for idx, metric in enumerate(metrics):
+        ax = axes[idx]
+        
+        # Prepare data
+        ft_values = [results['finetuned'][f'class_{metric}s'][cls] for cls in classes]
+        pt_values = [results['pretrained'][f'class_{metric}s'][cls] for cls in classes]
+        
+        # Add mean values
+        ft_values.append(results['finetuned'][f'mean_{metric}'])
+        pt_values.append(results['pretrained'][f'mean_{metric}'])
+        class_labels = classes + ['Mean']
+        
+        # Create grouped bar plot
+        x = np.arange(len(class_labels))
+        width = 0.35
+        
+        bars1 = ax.bar(x - width/2, pt_values, width, label='Pretrained', alpha=0.8)
+        bars2 = ax.bar(x + width/2, ft_values, width, label='Finetuned', alpha=0.8)
+        
+        # Customize plot
+        ax.set_xlabel('Classes')
+        ax.set_ylabel(metric.upper())
+        ax.set_title(f'{metric.upper()} Comparison')
+        ax.set_xticks(x)
+        ax.set_xticklabels(class_labels, rotation=45, ha='right')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        
+        # Add value labels on bars
+        for bars in [bars1, bars2]:
+            for bar in bars:
+                height = bar.get_height()
+                ax.annotate(f'{height:.3f}',
+                           xy=(bar.get_x() + bar.get_width() / 2, height),
+                           xytext=(0, 3),  # 3 points vertical offset
+                           textcoords="offset points",
+                           ha='center', va='bottom',
+                           fontsize=8)
+    
+    # Remove empty subplot
+    fig.delaxes(axes[-1])
+    
+    plt.tight_layout()
+    plot_path = output_dir / 'metrics_comparison.png'
+    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Metrics comparison plot saved to: {plot_path}")
 
 def visualize_comparison(
     finetuned_model, ft_processor, 
@@ -201,10 +350,18 @@ def visualize_comparison(
             color_map_rgb = np.array([SEGMENTATION_COLORS_RGB[c] for c in classes], dtype=np.uint8)
             segmentation_maps[model_name] = color_map_rgb[pred_labels.numpy()]
 
-            # Calculate and format IoU text
-            iou_scores = {cls: calculate_iou(resized_masks[i].numpy(), gt_masks[cls]) for i, cls in enumerate(classes)}
-            iou_text = f"{model_name} IoU Scores:\n" + "\n".join([f"  - {c}: {s:.3f}" for c, s in iou_scores.items()])
-            iou_texts[model_name] = iou_text
+            # Calculate all metrics for each class
+            all_metrics = {}
+            for i, cls in enumerate(classes):
+                metrics = calculate_metrics(resized_masks[i].numpy(), gt_masks[cls])
+                all_metrics[cls] = metrics
+            
+            # Format text with key metrics
+            metric_text = f"{model_name} Metrics:\n"
+            for cls in classes:
+                m = all_metrics[cls]
+                metric_text += f"  {cls}: IoU={m['iou']:.3f}, F1={m['f1']:.3f}\n"
+            iou_texts[model_name] = metric_text
 
         # --- Create 4-panel plot ---
         fig, axes = plt.subplots(2, 2, figsize=EVALUATION_CONFIG['figure_size'], dpi=EVALUATION_CONFIG['visualization_dpi'])
@@ -287,12 +444,33 @@ def main():
             output_dir, args.num_samples
         )
         
-        print("\n" + "="*50)
-        print("✅ Evaluation Summary (mIoU):")
-        print(f"  - Pretrained: {results['pretrained']['mean_iou']:.4f}")
-        print(f"  - Finetuned:  {results['finetuned']['mean_iou']:.4f}")
-        print(f"  - Improvement: {results['finetuned']['mean_iou'] - results['pretrained']['mean_iou']:+.4f}")
-        print("="*50)
+        print("\n" + "="*70)
+        print("✅ Evaluation Summary:")
+        print("="*70)
+        
+        # Display all metrics
+        metrics = ['IoU', 'Precision', 'Recall', 'F1', 'Pixel_Accuracy']
+        print(f"{'Metric':<15} {'Pretrained':<12} {'Finetuned':<12} {'Improvement':<12}")
+        print("-" * 70)
+        
+        for metric in metrics:
+            metric_key = metric.lower()
+            pt_value = results['pretrained'][f'mean_{metric_key}']
+            ft_value = results['finetuned'][f'mean_{metric_key}']
+            improvement = ft_value - pt_value
+            print(f"{metric:<15} {pt_value:<12.4f} {ft_value:<12.4f} {improvement:+12.4f}")
+        
+        print("="*70)
+        
+        # Per-class IoU improvements
+        print("\nPer-class IoU improvements:")
+        for cls in URBAN_CLASSES:
+            pt_iou = results['pretrained']['class_ious'][cls]
+            ft_iou = results['finetuned']['class_ious'][cls]
+            improvement = ft_iou - pt_iou
+            print(f"  {cls:<20}: {pt_iou:.4f} → {ft_iou:.4f} ({improvement:+.4f})")
+        
+        print(f"\nDetailed results saved to: {output_dir}")
         
     except Exception as e:
         print(f"\n❌ An error occurred during evaluation: {e}")
