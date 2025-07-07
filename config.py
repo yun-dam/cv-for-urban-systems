@@ -61,14 +61,15 @@ SEGMENTATION_COLORS_RGB = {
 
 # 数据集参数
 DATASET_CONFIG = {
-    'finetune_pool_size': 4,  # LAPTOP: 4 | SERVER: 20 (原始图片数量)
-    'n_cv_folds': 2,          # LAPTOP: 2 | SERVER: 5 (交叉验证fold数)
-    'random_seed': 42         # 随机种子
+    'finetune_pool_size': 10,  # LAPTOP: 4 | SERVER: 20 (原始图片数量)
+    'n_cv_folds': 3,          # LAPTOP: 2 | SERVER: 5 (交叉验证fold数)
+    'random_seed': 42,        # 随机种子
+    'final_val_split': 0.2    # 最终训练时验证集比例（原始图像级别）
 }
 
 # 数据增强参数
 AUGMENTATION_CONFIG = {
-    'num_augmentations_per_image': 2,  # LAPTOP: 3 | SERVER: 5
+    'num_augmentations_per_image': 5,  # LAPTOP: 3 | SERVER: 5
     # 'horizontal_flip': True,
     # 'vertical_flip': True,
     # 'rotation_range': (-30, 30),
@@ -82,17 +83,17 @@ AUGMENTATION_CONFIG = {
 # 用于 run_hyperparameter_search.py
 SEARCH_CONFIG = {
     # Optuna 框架设置
-    'n_trials': 2,               # LAPTOP: 2 | SERVER: 20 (总共尝试多少组超参数)
+    'n_trials': 10,               # LAPTOP: 2 | SERVER: 20 (总共尝试多少组超参数)
     'study_name': 'clipseg_cv_search_laptop',
     'direction': 'minimize',     # 优化方向：最小化验证集损失
 
     # 每个Trial的训练设置
-    'num_epochs': 2,             # LAPTOP: 2 | SERVER: 10 (每次试验训练的轮数)
+    'num_epochs': 10,             # LAPTOP: 2 | SERVER: 10 (每次试验训练的轮数)
     'patience': 3,            # LAPTOP: 3 | SERVER: 5 (早停策略)
 
     # 超参数搜索空间
     'space': {
-        'learning_rate': {'type': 'loguniform', 'low': 1e-6, 'high': 1e-4},
+        'learning_rate': {'type': 'loguniform', 'low': 1e-6, 'high': 5e-4},
         'dice_weight':   {'type': 'uniform', 'low': 0.5, 'high': 0.9},
         'batch_size':    {'type': 'categorical', 'choices': [2, 4]}, # 笔记本建议使用小batch
     }
@@ -103,8 +104,13 @@ SEARCH_CONFIG = {
 # ==============================================================================
 # 用于 train_final_model.py
 FINAL_TRAIN_CONFIG = {
-    'num_epochs': 5,             # LAPTOP: 5 | SERVER: 50 (最终模型总共训练的轮数)
-
+    'num_epochs': 50,             # LAPTOP: 5 | SERVER: 50 (最终模型总共训练的轮数)
+    'patience': 5,                # 早停patience (如果验证损失不下降的轮数)
+    'min_delta': 1e-4,            # 最小改善阈值
+    
+    # 注意: 验证集分割已在 DATASET_CONFIG['final_val_split'] 中定义
+    # 数据在 data_augmentation.py 中预先分割
+    
     # 注意: 下面的 learning_rate, batch_size, dice_weight
     # 将会被超参数搜索找到的最佳值覆盖。
     # 这里的值仅用于调试或在没有搜索结果时作为备用。

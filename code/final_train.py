@@ -13,7 +13,7 @@ sys.path.append(str(Path(__file__).resolve().parent.parent))
 from config import *
 from utils import (
     create_data_loader, create_model_and_optimizer, train_one_epoch,
-    save_model, set_seed, ensure_dirs, get_device,
+    evaluate_model, save_model, set_seed, ensure_dirs, get_device,
     create_training_logger, update_training_log, save_training_log, get_current_lr
 )
 
@@ -42,19 +42,38 @@ def train_final_model(best_params: Dict):
     device = get_device()
     processor = CLIPSegProcessor.from_pretrained(PRETRAINED_MODEL)
     
-    # 使用由 data_augmentation.py 创建的全量增强数据
+    # 使用由 data_augmentation.py 创建的预先分割好的数据
     final_data_dir = FINETUNE_DATA_DIR / "cv_prepared_data" / "all_data_for_final_train"
-    all_augmented_images = glob(str(final_data_dir / "images/*.tif"))
-    all_mask_dir = str(final_data_dir / "masks")
-
-    if not all_augmented_images:
-        raise FileNotFoundError(f"在 {final_data_dir} 中未找到用于最终训练的图片。")
-
-    print(f"  总训练图片数: {len(all_augmented_images)}")
     
+    # 分别加载训练集和验证集
+    train_data_dir = final_data_dir / "train"
+    val_data_dir = final_data_dir / "val"
+    
+    train_images = sorted(glob(str(train_data_dir / "images/*.tif")))
+    val_images = sorted(glob(str(val_data_dir / "images/*.tif")))
+    
+    train_mask_dir = str(train_data_dir / "masks")
+    val_mask_dir = str(val_data_dir / "masks")
+    
+    if not train_images or not val_images:
+        raise FileNotFoundError(
+            f"未找到预先分割的训练/验证数据。\n"
+            f"请先运行 data_augmentation.py 生成数据。\n"
+            f"期望路径: {train_data_dir} 和 {val_data_dir}"
+        )
+    
+    print(f"  训练集: {len(train_images)} 张图片（增强后）")
+    print(f"  验证集: {len(val_images)} 张图片（原始）")
+    
+    # 创建数据加载器
     train_loader = create_data_loader(
-        all_augmented_images, all_mask_dir, URBAN_CLASSES, processor,
+        train_images, train_mask_dir, URBAN_CLASSES, processor,
         best_params['batch_size'], shuffle=True
+    )
+    
+    val_loader = create_data_loader(
+        val_images, val_mask_dir, URBAN_CLASSES, processor,
+        best_params['batch_size'], shuffle=False
     )
     
     model, optimizer = create_model_and_optimizer(best_params['learning_rate'], device)
@@ -63,41 +82,69 @@ def train_final_model(best_params: Dict):
     final_logger = create_training_logger()
     final_logger['metadata']['model_type'] = 'final_model'
     final_logger['metadata']['hyperparameters'] = best_params
-    final_logger['metadata']['total_images'] = len(all_augmented_images)
+    final_logger['metadata']['train_images'] = len(train_images)
+    final_logger['metadata']['val_images'] = len(val_images)
     final_logger['metadata']['data_source'] = str(final_data_dir)
+    final_logger['metadata']['val_split_method'] = 'pre-split at original image level'
     
-    best_loss = float('inf')
+    best_val_loss = float('inf')
     best_epoch_model = None
     final_epochs = FINAL_TRAIN_CONFIG['num_epochs']
+    patience = FINAL_TRAIN_CONFIG.get('patience', 10)
+    min_delta = FINAL_TRAIN_CONFIG.get('min_delta', 1e-4)
+    patience_counter = 0
+    
+    print(f"\n  早停设置: patience={patience}, min_delta={min_delta}")
     
     for epoch in range(1, final_epochs + 1):
-        # 构造详细的描述信息
-        train_desc = f"最终训练 Epoch {epoch}/{final_epochs}"
-        
-        avg_loss = train_one_epoch(
+        # 训练阶段
+        train_desc = f"最终训练 Epoch {epoch}/{final_epochs} [训练]"
+        train_loss = train_one_epoch(
             model, train_loader, optimizer, device,
             best_params.get('dice_weight', FINAL_TRAIN_CONFIG['default_dice_weight']),
             desc_str=train_desc
         )
         
+        # 验证阶段
+        val_desc = f"最终训练 Epoch {epoch}/{final_epochs} [验证]"
+        val_loss, val_iou = evaluate_model(
+            model, val_loader, device,
+            best_params.get('dice_weight', FINAL_TRAIN_CONFIG['default_dice_weight']),
+            desc_str=val_desc
+        )
+        
         # 更新训练日志
         current_lr = get_current_lr(optimizer)
-        update_training_log(final_logger, epoch, avg_loss, lr=current_lr)
+        update_training_log(final_logger, epoch, train_loss, val_loss, current_lr)
         
-        if avg_loss < best_loss:
-            best_loss = avg_loss
+        print(f"  Epoch {epoch}: 训练损失={train_loss:.4f}, 验证损失={val_loss:.4f}, 验证IoU={val_iou:.4f}")
+        
+        # 检查是否为最佳模型
+        if val_loss < best_val_loss - min_delta:
+            best_val_loss = val_loss
             best_epoch_model = epoch
+            patience_counter = 0
+            
             model_save_path = FINETUNED_MODEL_DIR / "best_model"
             
             # 准备要保存的元数据
             metadata = {
-                'best_loss': best_loss,
+                'best_train_loss': train_loss,
+                'best_val_loss': val_loss,
+                'best_val_iou': val_iou,
                 'epoch': epoch,
                 'hyperparameters': best_params,
                 'total_epochs_planned': final_epochs
             }
             save_model(model, processor, model_save_path, metadata)
-            print(f"  ✨ 保存最佳模型 (损失: {avg_loss:.4f})")
+            print(f"  ✨ 保存最佳模型 (验证损失: {val_loss:.4f}, IoU: {val_iou:.4f})")
+        else:
+            patience_counter += 1
+            if patience_counter >= patience:
+                print(f"\n  🛑 早停触发: 验证损失已经 {patience} 轮没有改善")
+                final_logger['metadata']['early_stopped'] = True
+                final_logger['metadata']['stopped_at_epoch'] = epoch
+                break
     
     # 保存训练日志
     final_logger['metadata']['best_model_saved_at_epoch'] = best_epoch_model

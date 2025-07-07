@@ -38,11 +38,14 @@ FINETUNE_POOL_MASK_DIR = FINETUNE_DATA_DIR / "finetune_pool" / "masks"
 BASE_OUTPUT_DIR = FINETUNE_DATA_DIR / "cv_prepared_data"
 CV_FOLDS_DIR = BASE_OUTPUT_DIR / "cv_folds"
 ALL_AUGMENTED_DIR = BASE_OUTPUT_DIR / "all_data_for_final_train"
+FINAL_TRAIN_DIR = ALL_AUGMENTED_DIR / "train"
+FINAL_VAL_DIR = ALL_AUGMENTED_DIR / "val"
 
 # 参数
 N_AUG_PER_IMAGE = AUGMENTATION_CONFIG['num_augmentations_per_image']
 N_SPLITS = DATASET_CONFIG['n_cv_folds']
 RANDOM_SEED = DATASET_CONFIG['random_seed']
+FINAL_VAL_SPLIT = DATASET_CONFIG['final_val_split']
 CLASSES = [cls.replace(' ', '_').replace('/', '_') for cls in URBAN_CLASSES]
 
 # ==============================================================================
@@ -200,19 +203,38 @@ def main():
                           val_output_img_dir, val_output_mask_dir,
                           should_augment=AUGMENT_VALIDATION_SET, desc=f"Fold {fold_num} [验证集]")
 
-    # --- 任务 2: 创建用于最终训练的全量增强数据集 ---
-    print("\n--- 任务 2: 创建用于最终训练的全量数据集 ---")
-    final_train_img_dir = ALL_AUGMENTED_DIR / 'images'
-    final_train_mask_dir = ALL_AUGMENTED_DIR / 'masks'
-
-    # 处理所有图片（总是增强）
-    process_image_set(image_files, FINETUNE_POOL_IMG_DIR, FINETUNE_POOL_MASK_DIR,
+    # --- 任务 2: 创建用于最终训练的数据集（训练/验证分离） ---
+    print("\n--- 任务 2: 创建用于最终训练的数据集 ---")
+    
+    # 在原始图像级别分割训练集和验证集
+    from sklearn.model_selection import train_test_split
+    final_train_files, final_val_files = train_test_split(
+        image_files, test_size=FINAL_VAL_SPLIT, random_state=RANDOM_SEED
+    )
+    
+    print(f"最终训练数据分割：")
+    print(f"  - 训练集: {len(final_train_files)} 张原始图片 (将增强到 {len(final_train_files) * N_AUG_PER_IMAGE} 张)")
+    print(f"  - 验证集: {len(final_val_files)} 张原始图片 (保持原始)")
+    
+    # 处理最终训练集（增强）
+    final_train_img_dir = FINAL_TRAIN_DIR / 'images'
+    final_train_mask_dir = FINAL_TRAIN_DIR / 'masks'
+    process_image_set(final_train_files, FINETUNE_POOL_IMG_DIR, FINETUNE_POOL_MASK_DIR,
                       final_train_img_dir, final_train_mask_dir,
-                      should_augment=True, desc="全量数据增强")
+                      should_augment=True, desc="最终训练集增强")
+    
+    # 处理最终验证集（不增强，只复制原始）
+    final_val_img_dir = FINAL_VAL_DIR / 'images'
+    final_val_mask_dir = FINAL_VAL_DIR / 'masks'
+    process_image_set(final_val_files, FINETUNE_POOL_IMG_DIR, FINETUNE_POOL_MASK_DIR,
+                      final_val_img_dir, final_val_mask_dir,
+                      should_augment=False, desc="最终验证集（不增强）")
 
     print("\n✅ 所有数据准备完成!")
     print(f"📁 K-Fold CV 数据保存在: {CV_FOLDS_DIR}")
     print(f"📁 最终训练数据保存在: {ALL_AUGMENTED_DIR}")
+    print(f"    - 训练集: {FINAL_TRAIN_DIR}")
+    print(f"    - 验证集: {FINAL_VAL_DIR}")
 
 if __name__ == "__main__":
     main()
