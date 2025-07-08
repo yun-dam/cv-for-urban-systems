@@ -1,6 +1,3 @@
-
-
-import os
 import sys
 import json
 import argparse
@@ -15,8 +12,6 @@ from PIL import Image
 import torch
 from torch.utils.data import DataLoader
 import matplotlib.pyplot as plt
-import seaborn as sns
-from sklearn.metrics import confusion_matrix
 from tqdm import tqdm
 from transformers import CLIPSegProcessor, CLIPSegForImageSegmentation
 
@@ -25,9 +20,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from config import *
 from utils import (
-    create_data_loader, 
     load_model, 
-    calculate_iou,
     FineTuneDataset,
     get_device
 )
@@ -119,7 +112,7 @@ def calculate_metrics(pred_mask, true_mask, threshold=0.5):
         'pixel_accuracy': pixel_acc
     }
 
-def evaluate_model_performance(model, processor, test_loader, device, classes) -> Dict:
+def evaluate_model_performance(model, test_loader, device, classes) -> Dict:
     """Evaluates a single model's performance and returns detailed results."""
     model.eval()
     # Initialize metric storage for each class
@@ -431,8 +424,8 @@ def main():
         # --- Run Evaluation ---
         print("\nStarting model performance evaluation...")
         results = {}
-        results['finetuned'] = evaluate_model_performance(finetuned_model, ft_processor, test_loader, device, URBAN_CLASSES)
-        results['pretrained'] = evaluate_model_performance(pretrained_model, pt_processor, test_loader, device, URBAN_CLASSES)
+        results['finetuned'] = evaluate_model_performance(finetuned_model, test_loader, device, URBAN_CLASSES)
+        results['pretrained'] = evaluate_model_performance(pretrained_model, test_loader, device, URBAN_CLASSES)
         
         # --- Generate Reports and Visuals ---
         print("\nGenerating reports and visualizations...")
