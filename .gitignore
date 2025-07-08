@@ -1,0 +1,88 @@
+# System files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Data files and directories (large files)
+data/
+*.h5
+*.hdf5
+*.pkl
+*.pickle
+*.npy
+*.npz
+*.mat
+
+# Model files and checkpoints
+clipseg_finetuned_model/
+*.pth
+*.pt
+*.ckpt
+*.weights
+checkpoints/
+models/
+
+# Visualization outputs (can be large)
+*_visualizations/
+*_baseline_visualizations/
+*_cropped_visualizations/
+potsdam_baseline_visualizations/
+potsdam_cropped_visualizations/
+vaihingen_baseline_visualizations/
+vaihingen_cropped_visualizations/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+logs/
+
+# output directories
+output/
+
+# archive files
+archived/
+# Documentation files (keep local only)
+CLAUDE.md
+gemini.md
