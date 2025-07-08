@@ -59,12 +59,12 @@ def parse_args() -> argparse.Namespace:
 
 def setup_device(device_arg: str) -> torch.device:
     """Sets up the computation device."""
-    # 使用 utils.py 中的 get_device 函数
-    # 如果用户没有指定设备，使用全局配置
+    # Use get_device function from utils.py
+    # If user didn't specify device, use global configuration
     if device_arg == DEVICE:
         device = get_device()
     else:
-        # 如果用户指定了特定设备，尊重用户的选择
+        # If user specified a specific device, respect user's choice
         device = torch.device(device_arg)
     
     print(f"Using device: {device}")
