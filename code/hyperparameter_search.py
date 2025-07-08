@@ -10,10 +10,10 @@ from datetime import datetime
 from typing import Dict
 import sys
 
-# 将项目根目录添加到Python路径
+# Add project root directory to Python path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-# 导入配置和更新后的工具函数
+# Import configuration and updated utility functions
 from config import *
 from utils import (
     create_data_loader, create_model_and_optimizer, train_one_epoch,
@@ -22,19 +22,19 @@ from utils import (
     create_training_logger, update_training_log, save_training_log, get_current_lr
 )
 
-# 禁用HuggingFace警告
+# Disable HuggingFace warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 def load_fold_info() -> Dict:
-    """扫描并加载预处理好的交叉验证数据折信息。"""
-    print("📂 正在加载预处理的交叉验证折信息...")
+    """Scan and load preprocessed cross-validation fold information."""
+    print("📂 Loading preprocessed cross-validation fold information...")
     fold_info = {}
     cv_folds_dir = FINETUNE_DATA_DIR / "cv_prepared_data" / "cv_folds"
 
     if not cv_folds_dir.exists():
         raise FileNotFoundError(
-            f"CV folds 目录不存在: {cv_folds_dir}\n"
-            "请先运行 'data_augmentation.py' 脚本来生成数据。"
+            f"CV folds directory does not exist: {cv_folds_dir}\n"
+            "Please run 'data_augmentation.py' script first to generate data."
         )
 
     for fold_dir in sorted(cv_folds_dir.glob('fold_*')):
@@ -43,7 +43,7 @@ def load_fold_info() -> Dict:
         val_images = glob(str(fold_dir / "val/images/*.tif"))
         
         if not train_images or not val_images:
-            print(f"⚠️ 警告: Fold {fold_idx + 1} 数据不完整，跳过。")
+            print(f"⚠️ Warning: Fold {fold_idx + 1} data incomplete, skipping.")
             continue
 
         fold_info[fold_idx] = {
@@ -51,16 +51,16 @@ def load_fold_info() -> Dict:
             "train_mask_dir": str(fold_dir / "train/masks"),
             "val_mask_dir": str(fold_dir / "val/masks")
         }
-        print(f"  - Fold {fold_idx + 1}: 找到 {len(train_images)} 训练图片, {len(val_images)} 验证图片。")
+        print(f"  - Fold {fold_idx + 1}: Found {len(train_images)} training images, {len(val_images)} validation images.")
 
     if not fold_info:
-        raise ValueError(f"在 {cv_folds_dir} 中未能加载任何有效的fold数据。")
+        raise ValueError(f"Unable to load any valid fold data in {cv_folds_dir}.")
     
-    print("✅ CV fold数据加载完成。")
+    print("✅ CV fold data loading completed.")
     return fold_info
 
 def train_and_evaluate_fold(fold_idx: int, trial_num: int, fold_data: Dict, hyperparams: Dict, device, processor) -> Dict:
-    """在单个fold上训练和评估模型，并提供详细的进度信息。返回包含最佳损失和训练日志的字典。"""
+    """Train and evaluate model on a single fold with detailed progress information. Returns dictionary containing best loss and training log."""
     train_loader = create_data_loader(
         fold_data['train_images'], fold_data['train_mask_dir'], URBAN_CLASSES, processor,
         hyperparams['batch_size'], shuffle=True
@@ -72,7 +72,7 @@ def train_and_evaluate_fold(fold_idx: int, trial_num: int, fold_data: Dict, hype
     
     model, optimizer = create_model_and_optimizer(hyperparams['learning_rate'], device)
     
-    # 创建训练日志记录器
+    # Create training logger
     fold_logger = create_training_logger()
     fold_logger['metadata']['trial_num'] = trial_num
     fold_logger['metadata']['fold_idx'] = fold_idx
@@ -84,14 +84,14 @@ def train_and_evaluate_fold(fold_idx: int, trial_num: int, fold_data: Dict, hype
     search_epochs = SEARCH_CONFIG['num_epochs']
 
     for epoch in range(1, search_epochs + 1):
-        # 构造详细的描述信息
+        # Construct detailed description information
         train_desc = f"Trial {trial_num+1} Fold {fold_idx+1} Epoch {epoch}/{search_epochs} [Train]"
         val_desc = f"Trial {trial_num+1} Fold {fold_idx+1} Epoch {epoch}/{search_epochs} [Val]"
 
         train_loss = train_one_epoch(model, train_loader, optimizer, device, hyperparams['dice_weight'], desc_str=train_desc)
         val_loss, _ = evaluate_model(model, val_loader, device, hyperparams['dice_weight'], desc_str=val_desc)
         
-        # 更新训练日志
+        # Update training log
         current_lr = get_current_lr(optimizer)
         update_training_log(fold_logger, epoch, train_loss, val_loss, current_lr)
         
@@ -101,7 +101,7 @@ def train_and_evaluate_fold(fold_idx: int, trial_num: int, fold_data: Dict, hype
         else:
             patience_counter += 1
             if patience_counter >= patience:
-                print(f"  -- 早停在 epoch {epoch}")
+                print(f"  -- Early stopping at epoch {epoch}")
                 fold_logger['metadata']['early_stopped'] = True
                 fold_logger['metadata']['stopped_at_epoch'] = epoch
                 break
@@ -112,7 +112,7 @@ def train_and_evaluate_fold(fold_idx: int, trial_num: int, fold_data: Dict, hype
     }
 
 def objective(trial, fold_info: Dict, device, processor) -> float:
-    """Optuna目标函数。"""
+    """Optuna objective function."""
     hyperparams = {
         'learning_rate': get_hyperparameter_from_trial(trial, 'learning_rate'),
         'dice_weight': get_hyperparameter_from_trial(trial, 'dice_weight'),
@@ -128,14 +128,14 @@ def objective(trial, fold_info: Dict, device, processor) -> float:
             fold_scores.append(result['best_val_loss'])
             trial_loggers.append(result['fold_logger'])
         except Exception as e:
-            print(f"Fold {fold_idx} 训练失败: {e}")
+            print(f"Fold {fold_idx} training failed: {e}")
             return float('inf')
     
     avg_score = np.mean(fold_scores) if fold_scores else float('inf')
     trial.set_user_attr("mean_val_loss", avg_score)
     trial.set_user_attr("fold_scores", fold_scores)
     
-    # 保存该trial的所有fold训练日志
+    # Save all fold training logs for this trial
     trial_log_dir = HYPERPARAMETER_SEARCH_DIR / "trial_logs" / f"trial_{trial.number}"
     trial_log_dir.mkdir(parents=True, exist_ok=True)
     
@@ -143,7 +143,7 @@ def objective(trial, fold_info: Dict, device, processor) -> float:
         log_path = trial_log_dir / f"fold_{fold_idx + 1}_log.json"
         save_training_log(fold_logger, log_path)
     
-    # 保存trial总结
+    # Save trial summary
     trial_summary = {
         'trial_number': trial.number,
         'hyperparameters': hyperparams,
@@ -158,9 +158,9 @@ def objective(trial, fold_info: Dict, device, processor) -> float:
     return avg_score
 
 def run_hyperparameter_search(fold_info: Dict):
-    """运行超参数搜索并保存结果。"""
+    """Run hyperparameter search and save results."""
     n_trials = SEARCH_CONFIG['n_trials']
-    print(f"\n🔍 开始超参数搜索 ({n_trials} trials)...")
+    print(f"\n🔍 Starting hyperparameter search ({n_trials} trials)...")
     
     device = get_device()
     processor = CLIPSegProcessor.from_pretrained(PRETRAINED_MODEL)
@@ -169,18 +169,18 @@ def run_hyperparameter_search(fold_info: Dict):
     study.optimize(lambda trial: objective(trial, fold_info, device, processor), n_trials=n_trials)
     
     print("\n" + "="*50)
-    print("✅ 超参数搜索完成!")
-    print(f"  最佳试验: Trial {study.best_trial.number}")
-    print(f"  最佳分数 (损失): {study.best_value:.4f}")
-    print(f"  最佳参数: {study.best_params}")
+    print("✅ Hyperparameter search completed!")
+    print(f"  Best trial: Trial {study.best_trial.number}")
+    print(f"  Best score (loss): {study.best_value:.4f}")
+    print(f"  Best parameters: {study.best_params}")
     print("="*50)
     
-    # 保存最佳超参数
+    # Save best hyperparameters
     results_file = HYPERPARAMETER_SEARCH_DIR / "best_hyperparams.json"
     save_config(study.best_params, results_file)
-    print(f"\n💾 最佳超参数已保存到: {results_file}")
+    print(f"\n💾 Best hyperparameters saved to: {results_file}")
     
-    # 保存完整的搜索结果
+    # Save complete search results
     search_summary = {
         'study_name': SEARCH_CONFIG['study_name'],
         'n_trials': n_trials,
@@ -200,15 +200,15 @@ def run_hyperparameter_search(fold_info: Dict):
         }
         search_summary['all_trials'].append(trial_info)
     
-    # 保存搜索总结
+    # Save search summary
     summary_path = HYPERPARAMETER_SEARCH_DIR / "search_summary.json"
     with open(summary_path, 'w') as f:
         json.dump(search_summary, f, indent=2)
-    print(f"📊 搜索总结已保存到: {summary_path}")
+    print(f"📊 Search summary saved to: {summary_path}")
 
 def main():
-    """主函数：加载数据 -> 运行搜索 -> 保存结果"""
-    print("🚀 步骤 2: 运行超参数搜索")
+    """Main function: load data -> run search -> save results"""
+    print("🚀 Step 2: Run hyperparameter search")
     print("=" * 60)
     
     set_seed()
@@ -218,10 +218,10 @@ def main():
         fold_info = load_fold_info()
         run_hyperparameter_search(fold_info)
     except (FileNotFoundError, ValueError) as e:
-        print(f"\n❌ 错误: {e}")
+        print(f"\n❌ Error: {e}")
         return
 
-    print("\n🎉 超参数搜索流程执行完成!")
+    print("\n🎉 Hyperparameter search workflow completed!")
 
 if __name__ == "__main__":
     main()
