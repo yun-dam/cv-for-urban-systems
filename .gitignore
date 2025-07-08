@@ -61,6 +61,7 @@ share/python-wheels/
 
 # Virtual environments
 venv/
+.venv/
 env/
 ENV/
 
@@ -76,6 +77,12 @@ ENV/
 # Logs
 *.log
 logs/
+
+# output directories
+output/
+
+# archive files
+archived/
 # Documentation files (keep local only)
 CLAUDE.md
 gemini.md
