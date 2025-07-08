@@ -14,7 +14,8 @@ from config import *
 from utils import (
     create_data_loader, create_model_and_optimizer, train_one_epoch,
     evaluate_model, save_model, set_seed, ensure_dirs, get_device,
-    create_training_logger, update_training_log, save_training_log, get_current_lr
+    create_training_logger, update_training_log, save_training_log, get_current_lr,
+    CheckpointManager
 )
 
 # Disable HuggingFace warnings
@@ -78,6 +79,12 @@ def train_final_model(best_params: Dict):
     
     model, optimizer = create_model_and_optimizer(best_params['learning_rate'], device)
     
+    # Create checkpoint manager
+    checkpoint_manager = CheckpointManager(
+        FINETUNED_MODEL_DIR / "checkpoints",
+        max_checkpoints=FINAL_TRAIN_CONFIG.get('max_checkpoints', 3)
+    )
+    
     # Create training logger
     final_logger = create_training_logger()
     final_logger['metadata']['model_type'] = 'final_model'
@@ -93,10 +100,50 @@ def train_final_model(best_params: Dict):
     patience = FINAL_TRAIN_CONFIG.get('patience', 10)
     min_delta = FINAL_TRAIN_CONFIG.get('min_delta', 1e-4)
     patience_counter = 0
+    start_epoch = 1
+    
+    # Check if we should resume from checkpoint
+    if FINAL_TRAIN_CONFIG.get('resume_from_checkpoint', True):
+        available_checkpoints = checkpoint_manager.get_available_checkpoints()
+        if available_checkpoints:
+            print(f"\n📂 Found checkpoints: {available_checkpoints}")
+            
+            # Ask user if they want to resume
+            while True:
+                user_input = input("\nDo you want to resume from checkpoint? (y/n): ").lower().strip()
+                if user_input in ['y', 'yes', 'n', 'no']:
+                    break
+                print("Please enter 'y' for yes or 'n' for no.")
+            
+            if user_input in ['y', 'yes']:
+                # Try to load latest checkpoint
+                checkpoint = checkpoint_manager.load_checkpoint('latest')
+                if checkpoint:
+                    # Restore model and optimizer state
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                    
+                    # Restore training state
+                    start_epoch = checkpoint['epoch'] + 1
+                    best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+                    best_epoch_model = checkpoint.get('best_epoch', None)
+                    patience_counter = checkpoint.get('patience_counter', 0)
+                    
+                    # Restore training logger if available
+                    if 'training_log' in checkpoint:
+                        final_logger = checkpoint['training_log']
+                    
+                    print(f"✅ Resuming training from epoch {start_epoch}")
+                    print(f"   Best validation loss so far: {best_val_loss:.4f}")
+                    print(f"   Patience counter: {patience_counter}/{patience}")
+            else:
+                print("🆕 Starting fresh training (ignoring checkpoints).")
+        else:
+            print("\n📂 No checkpoints found. Starting fresh training.")
     
     print(f"\n  Early stopping settings: patience={patience}, min_delta={min_delta}")
     
-    for epoch in range(1, final_epochs + 1):
+    for epoch in range(start_epoch, final_epochs + 1):
         # Training phase
         train_desc = f"Final Training Epoch {epoch}/{final_epochs} [Training]"
         train_loss = train_one_epoch(
@@ -120,7 +167,8 @@ def train_final_model(best_params: Dict):
         print(f"  Epoch {epoch}: Training loss={train_loss:.4f}, Validation loss={val_loss:.4f}, Validation IoU={val_iou:.4f}")
         
         # Check if this is the best model
-        if val_loss < best_val_loss - min_delta:
+        is_best = val_loss < best_val_loss - min_delta
+        if is_best:
             best_val_loss = val_loss
             best_epoch_model = epoch
             patience_counter = 0
@@ -145,6 +193,37 @@ def train_final_model(best_params: Dict):
                 final_logger['metadata']['early_stopped'] = True
                 final_logger['metadata']['stopped_at_epoch'] = epoch
                 break
+        
+        # Save checkpoint
+        if epoch % FINAL_TRAIN_CONFIG.get('checkpoint_interval', 5) == 0 or is_best:
+            checkpoint_state = {
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'best_val_loss': best_val_loss,
+                'best_epoch': best_epoch_model,
+                'patience_counter': patience_counter,
+                'training_log': final_logger,
+                'train_loss': train_loss,
+                'val_loss': val_loss,
+                'val_iou': val_iou,
+                'hyperparameters': best_params
+            }
+            checkpoint_manager.save_checkpoint(checkpoint_state, epoch, is_best=is_best)
+    
+    # Save final checkpoint before exiting
+    final_checkpoint_state = {
+        'epoch': epoch if 'epoch' in locals() else final_epochs,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'best_val_loss': best_val_loss,
+        'best_epoch': best_epoch_model,
+        'patience_counter': patience_counter,
+        'training_log': final_logger,
+        'hyperparameters': best_params,
+        'training_completed': True
+    }
+    checkpoint_manager.save_checkpoint(final_checkpoint_state, epoch if 'epoch' in locals() else final_epochs, is_best=False)
     
     # Save training log
     final_logger['metadata']['best_model_saved_at_epoch'] = best_epoch_model
@@ -153,6 +232,7 @@ def train_final_model(best_params: Dict):
     
     print(f"\n✅ Final model training completed! ")
     print(f"   - Model saved at: {FINETUNED_MODEL_DIR / 'best_model'}")
+    print(f"   - Checkpoints saved at: {FINETUNED_MODEL_DIR / 'checkpoints'}")
     print(f"   - Training log saved at: {log_path}")
     print(f"   - Best model from epoch {best_epoch_model}/{final_epochs}")
 

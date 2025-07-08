@@ -56,20 +56,15 @@ SEGMENTATION_COLORS_RGB = {
 
 # Dataset parameters
 DATASET_CONFIG = {
-    'finetune_pool_size': 10,  # LAPTOP: 4 | SERVER: 20 (number of original images)
-    'n_cv_folds': 3,          # LAPTOP: 2 | SERVER: 5 (cross-validation fold count)
-    'random_seed': 42,        # Random seed
-    'final_val_split': 0.2    # Validation split ratio for final training (original image level)
+    'finetune_pool_size': 20,  # LAPTOP: 4 | SERVER: 20 (number of original images)
+    'n_cv_folds': 5,           # LAPTOP: 2 | SERVER: 5 (cross-validation fold count)
+    'random_seed': 42,         # Random seed
+    'final_val_split': 0.2     # Validation split ratio for final training (original image level)
 }
 
 # Data augmentation parameters
 AUGMENTATION_CONFIG = {
-    'num_augmentations_per_image': 5,  # LAPTOP: 3 | SERVER: 5
-    # 'horizontal_flip': True,
-    # 'vertical_flip': True,
-    # 'rotation_range': (-30, 30),
-    # 'brightness_limit': 0.1,
-    # 'contrast_limit': 0.1,
+    'num_augmentations_per_image': 10,  # LAPTOP: 3 | SERVER: 10
 }
 
 # ==============================================================================
@@ -78,19 +73,19 @@ AUGMENTATION_CONFIG = {
 # For hyperparameter_search.py
 SEARCH_CONFIG = {
     # Optuna framework settings
-    'n_trials': 10,               # LAPTOP: 2 | SERVER: 20 (total number of hyperparameter combinations to try)
+    'n_trials': 20,               # LAPTOP: 2 | SERVER: 20 (total number of hyperparameter combinations to try)
     'study_name': 'clipseg_cv_search_laptop',
     'direction': 'minimize',     # Optimization direction: minimize validation loss
 
     # Training settings for each trial
-    'num_epochs': 10,             # LAPTOP: 2 | SERVER: 10 (training epochs per trial)
-    'patience': 3,            # LAPTOP: 3 | SERVER: 5 (early stopping patience)
+    'num_epochs': 20,             # LAPTOP: 2 | SERVER: 10 (training epochs per trial)
+    'patience': 5,            # LAPTOP: 3 | SERVER: 5 (early stopping patience)
 
     # Hyperparameter search space
     'space': {
         'learning_rate': {'type': 'loguniform', 'low': 1e-6, 'high': 5e-4},
         'dice_weight':   {'type': 'uniform', 'low': 0.5, 'high': 0.9},
-        'batch_size':    {'type': 'categorical', 'choices': [2, 4]}, # Small batch recommended for laptop
+        'batch_size':    {'type': 'categorical', 'choices': [2, 4, 8]}, # Small batch recommended for laptop
     }
 }
 
@@ -136,11 +131,6 @@ EVALUATION_CONFIG = {
     'figure_size': (16, 16),  # Image size for 4-panel visualization
     'visualization_dpi': 150,  # DPI for visualization images
 }
-
-# ==============================================================================
-# Note: All utility functions have been moved to utils.py
-# config.py now contains only configuration parameters
-# ==============================================================================
 
 if __name__ == "__main__":
     print("✅ config.py: Configuration file loaded successfully.")

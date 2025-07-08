@@ -309,3 +309,143 @@ def load_model(model_path: Path, device):
             metadata = json.load(f)
     
     return model, processor, metadata
+
+# ==============================================================================
+# Checkpoint Management Functionality
+# ==============================================================================
+class CheckpointManager:
+    """Manage training checkpoint saving and loading"""
+    
+    def __init__(self, checkpoint_dir: Path, max_checkpoints: int = 3):
+        """
+        Args:
+            checkpoint_dir: checkpoint save directory
+            max_checkpoints: maximum number of checkpoints to keep (excluding best and latest)
+        """
+        self.checkpoint_dir = Path(checkpoint_dir)
+        self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
+        self.max_checkpoints = max_checkpoints
+        
+    def save_checkpoint(self, state: Dict, epoch: int, is_best: bool = False):
+        """Save checkpoint
+        
+        Args:
+            state: dictionary containing model state
+            epoch: current epoch
+            is_best: whether this is the best model
+        """
+        # Save latest checkpoint (using temporary file to avoid corruption)
+        latest_path = self.checkpoint_dir / "checkpoint_latest.pt"
+        temp_path = latest_path.with_suffix('.tmp')
+        torch.save(state, temp_path)
+        temp_path.rename(latest_path)
+        
+        # If it's the best model, save an additional copy
+        if is_best:
+            best_path = self.checkpoint_dir / "checkpoint_best.pt"
+            temp_path = best_path.with_suffix('.tmp')
+            torch.save(state, temp_path)
+            temp_path.rename(best_path)
+            print(f"💾 Saved best model checkpoint (epoch {epoch})")
+        
+        # Periodically saved checkpoint
+        epoch_path = self.checkpoint_dir / f"checkpoint_epoch_{epoch}.pt"
+        temp_path = epoch_path.with_suffix('.tmp')
+        torch.save(state, temp_path)
+        temp_path.rename(epoch_path)
+        print(f"💾 Saved checkpoint: {epoch_path.name}")
+        
+        # Clean up old checkpoints
+        self._cleanup_old_checkpoints()
+        
+    def _cleanup_old_checkpoints(self):
+        """Delete old checkpoints, keeping only the most recent ones"""
+        # Get all epoch checkpoints (excluding best and latest)
+        epoch_checkpoints = sorted(
+            self.checkpoint_dir.glob("checkpoint_epoch_*.pt"),
+            key=lambda p: int(p.stem.split('_')[-1])
+        )
+        
+        # If exceeding maximum number, delete the oldest ones
+        while len(epoch_checkpoints) > self.max_checkpoints:
+            oldest = epoch_checkpoints.pop(0)
+            oldest.unlink()
+            print(f"🗑️  Deleted old checkpoint: {oldest.name}")
+    
+    def load_checkpoint(self, checkpoint_name: str = "latest"):
+        """Load checkpoint
+        
+        Args:
+            checkpoint_name: name of checkpoint to load ('latest', 'best', or 'epoch_N')
+            
+        Returns:
+            checkpoint dictionary, or None if not found
+        """
+        if checkpoint_name == "latest":
+            checkpoint_path = self.checkpoint_dir / "checkpoint_latest.pt"
+        elif checkpoint_name == "best":
+            checkpoint_path = self.checkpoint_dir / "checkpoint_best.pt"
+        else:
+            checkpoint_path = self.checkpoint_dir / f"checkpoint_{checkpoint_name}.pt"
+            
+        if checkpoint_path.exists():
+            print(f"📂 Loading checkpoint: {checkpoint_path.name}")
+            # PyTorch 2.6+ requires weights_only=False to load checkpoints containing non-tensor objects
+            return torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        else:
+            return None
+            
+    def get_available_checkpoints(self):
+        """Get list of all available checkpoints"""
+        checkpoints = []
+        
+        # Check special checkpoints
+        for special in ["latest", "best"]:
+            path = self.checkpoint_dir / f"checkpoint_{special}.pt"
+            if path.exists():
+                checkpoints.append(special)
+                
+        # Check epoch checkpoints
+        epoch_checkpoints = sorted(
+            self.checkpoint_dir.glob("checkpoint_epoch_*.pt"),
+            key=lambda p: int(p.stem.split('_')[-1])
+        )
+        
+        for cp in epoch_checkpoints:
+            epoch_num = cp.stem.split('_')[-1]
+            checkpoints.append(f"epoch_{epoch_num}")
+            
+        return checkpoints
+
+def save_checkpoint(state: Dict, checkpoint_path: Path):
+    """Save checkpoint (simple version for backward compatibility)"""
+    checkpoint_path = Path(checkpoint_path)
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    
+    # Use temporary file to avoid interruption during writing
+    temp_path = checkpoint_path.with_suffix('.tmp')
+    torch.save(state, temp_path)
+    temp_path.rename(checkpoint_path)
+    
+def load_checkpoint(checkpoint_path: Path, model, optimizer=None, device='cpu'):
+    """Load checkpoint (simple version for backward compatibility)
+    
+    Returns:
+        loaded epoch number, returns 0 if no checkpoint found
+    """
+    checkpoint_path = Path(checkpoint_path)
+    
+    if not checkpoint_path.exists():
+        return 0
+        
+    checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
+    
+    # Load model state
+    model.load_state_dict(checkpoint['model_state_dict'])
+    
+    # Load optimizer state (if provided)
+    if optimizer is not None and 'optimizer_state_dict' in checkpoint:
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        
+    # Return starting epoch
+    return checkpoint.get('epoch', 0) + 1
