@@ -32,7 +32,7 @@ NUM_FINETUNE_POOL = DATASET_CONFIG['finetune_pool_size']
 RANDOM_SEED = DATASET_CONFIG['random_seed']
 
 # Class and color definitions - Using configuration from config.py
-GT_COLOR_VALUES = CLASS_COLORS_BGR
+GT_COLOR_VALUES = CLASS_COLORS_RGB
 CLASSES = URBAN_CLASSES
 
 # ==============================================================================

@@ -34,24 +34,14 @@ URBAN_CLASSES = [
 
 CROP_SIZE = 512  # Image crop size
 
-# Class color definitions (BGR format)
-CLASS_COLORS_BGR = {
-    'impervious surface': [255, 255, 255],
-    'building': [0, 0, 255],
-    'low vegetation': [0, 255, 255],
-    'tree': [0, 255, 0],
-    'car': [255, 255, 0],
-    'background': [255, 0, 0]
-}
-
-# For visualization purposes (RGB format for Matplotlib)
-SEGMENTATION_COLORS_RGB = {
-    "impervious surface": (255, 255, 255),  # White
-    "building":           (0, 0, 255),      # Blue
-    "low vegetation":     (0, 255, 255),    # Cyan
-    "tree":               (0, 255, 0),      # Green
-    "car":                (255, 255, 0),    # Yellow
-    "background":         (255, 0, 0)       # Red
+# Class color definitions (RGB format) - used for ground truth mask extraction and visualization
+CLASS_COLORS_RGB = {
+    'impervious surface': (255, 255, 255),  # White
+    'building': (0, 0, 255),                # Blue
+    'low vegetation': (0, 255, 255),        # Cyan
+    'tree': (0, 255, 0),                    # Green
+    'car': (255, 255, 0),                   # Yellow
+    'background': (255, 0, 0)               # Red
 }
 
 # Dataset parameters
@@ -85,7 +75,7 @@ SEARCH_CONFIG = {
     'space': {
         'learning_rate': {'type': 'loguniform', 'low': 1e-6, 'high': 5e-4},
         'dice_weight':   {'type': 'uniform', 'low': 0.5, 'high': 0.9},
-        'batch_size':    {'type': 'categorical', 'choices': [2, 4, 8]}, # Small batch recommended for laptop
+        'batch_size':    {'type': 'categorical', 'choices': [2, 4, 8]},
     }
 }
 
@@ -94,8 +84,8 @@ SEARCH_CONFIG = {
 # ==============================================================================
 # For final_train.py
 FINAL_TRAIN_CONFIG = {
-    'num_epochs': 50,             # LAPTOP: 5 | SERVER: 50 (total training epochs for final model)
-    'patience': 5,                # Early stopping patience (epochs without validation loss improvement)
+    'num_epochs': 100,             # LAPTOP: 5 | SERVER: 50 (total training epochs for final model)
+    'patience': 10,                # Early stopping patience (epochs without validation loss improvement)
     'min_delta': 1e-4,            # Minimum improvement threshold
     
     # Note: validation split is already defined in DATASET_CONFIG['final_val_split']
@@ -126,10 +116,9 @@ EVALUATION_CONFIG = {
     'default_test_data': FINETUNE_DATA_DIR / "test" / "images",
     'default_output_dir': OUTPUT_DIR / "evaluation",
     'batch_size': 2,
-    'num_visualization_samples': 5,
-    # 'device' removed, unified to use global DEVICE configuration
-    'figure_size': (16, 16),  # Image size for 4-panel visualization
-    'visualization_dpi': 150,  # DPI for visualization images
+    'num_visualization_samples': 20,     # Number of samples to visualize in evaluation
+    'figure_size': (16, 16),
+    'visualization_dpi': 150,
 }
 
 if __name__ == "__main__":

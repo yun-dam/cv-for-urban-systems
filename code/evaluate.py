@@ -317,7 +317,7 @@ def visualize_comparison(
         images = [image] * len(classes)
         
         # Get ground truth masks
-        gt_masks = get_ground_truth_masks(label_path, classes, CLASS_COLORS_BGR)
+        gt_masks = get_ground_truth_masks(label_path, classes, CLASS_COLORS_RGB)
 
         # --- Inference and IoU calculation for both models ---
         models = {
@@ -340,7 +340,7 @@ def visualize_comparison(
             
             # Create segmentation map
             pred_labels = resized_masks.argmax(dim=0)
-            color_map_rgb = np.array([SEGMENTATION_COLORS_RGB[c] for c in classes], dtype=np.uint8)
+            color_map_rgb = np.array([CLASS_COLORS_RGB[c] for c in classes], dtype=np.uint8)
             segmentation_maps[model_name] = color_map_rgb[pred_labels.numpy()]
 
             # Calculate all metrics for each class
