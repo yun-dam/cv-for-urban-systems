@@ -6,10 +6,10 @@ import json
 from typing import Dict
 import sys
 
-# 将项目根目录添加到Python路径
+# Add project root directory to Python path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
 
-# 导入配置和更新后的工具函数
+# Import configuration and updated utility functions
 from config import *
 from utils import (
     create_data_loader, create_model_and_optimizer, train_one_epoch,
@@ -17,35 +17,35 @@ from utils import (
     create_training_logger, update_training_log, save_training_log, get_current_lr
 )
 
-# 禁用HuggingFace警告
+# Disable HuggingFace warnings
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
 def load_best_hyperparameters() -> Dict:
-    """从文件加载最佳超参数。"""
+    """Load best hyperparameters from file."""
     params_file = HYPERPARAMETER_SEARCH_DIR / "best_hyperparams.json"
     if not params_file.exists():
         raise FileNotFoundError(
-            f"未找到最佳超参数文件: {params_file}\n"
-            "请先运行 'hyperparameter_search.py' 脚本。"
+            f"Best hyperparameters file not found: {params_file}\n"
+            "Please run 'hyperparameter_search.py' script first."
         )
     
     with open(params_file, 'r') as f:
         best_params = json.load(f)
     
-    print(f"✅ 成功加载最佳超参数: {best_params}")
+    print(f"✅ Successfully loaded best hyperparameters: {best_params}")
     return best_params
 
 def train_final_model(best_params: Dict):
-    """使用最佳参数在全量增强数据上训练最终模型。"""
-    print("\n🎯 开始训练最终模型...")
+    """Train final model using best parameters on full augmented dataset."""
+    print("\n🎯 Starting final model training...")
     
     device = get_device()
     processor = CLIPSegProcessor.from_pretrained(PRETRAINED_MODEL)
     
-    # 使用由 data_augmentation.py 创建的预先分割好的数据
+    # Use pre-split data created by data_augmentation.py
     final_data_dir = FINETUNE_DATA_DIR / "cv_prepared_data" / "all_data_for_final_train"
     
-    # 分别加载训练集和验证集
+    # Load training and validation sets separately
     train_data_dir = final_data_dir / "train"
     val_data_dir = final_data_dir / "val"
     
@@ -57,15 +57,15 @@ def train_final_model(best_params: Dict):
     
     if not train_images or not val_images:
         raise FileNotFoundError(
-            f"未找到预先分割的训练/验证数据。\n"
-            f"请先运行 data_augmentation.py 生成数据。\n"
-            f"期望路径: {train_data_dir} 和 {val_data_dir}"
+            f"Pre-split training/validation data not found.\n"
+            f"Please run data_augmentation.py first to generate data.\n"
+            f"Expected paths: {train_data_dir} and {val_data_dir}"
         )
     
-    print(f"  训练集: {len(train_images)} 张图片（增强后）")
-    print(f"  验证集: {len(val_images)} 张图片（原始）")
+    print(f"  Training set: {len(train_images)} images (augmented)")
+    print(f"  Validation set: {len(val_images)} images (original)")
     
-    # 创建数据加载器
+    # Create data loaders
     train_loader = create_data_loader(
         train_images, train_mask_dir, URBAN_CLASSES, processor,
         best_params['batch_size'], shuffle=True
@@ -78,7 +78,7 @@ def train_final_model(best_params: Dict):
     
     model, optimizer = create_model_and_optimizer(best_params['learning_rate'], device)
     
-    # 创建训练日志记录器
+    # Create training logger
     final_logger = create_training_logger()
     final_logger['metadata']['model_type'] = 'final_model'
     final_logger['metadata']['hyperparameters'] = best_params
@@ -94,32 +94,32 @@ def train_final_model(best_params: Dict):
     min_delta = FINAL_TRAIN_CONFIG.get('min_delta', 1e-4)
     patience_counter = 0
     
-    print(f"\n  早停设置: patience={patience}, min_delta={min_delta}")
+    print(f"\n  Early stopping settings: patience={patience}, min_delta={min_delta}")
     
     for epoch in range(1, final_epochs + 1):
-        # 训练阶段
-        train_desc = f"最终训练 Epoch {epoch}/{final_epochs} [训练]"
+        # Training phase
+        train_desc = f"Final Training Epoch {epoch}/{final_epochs} [Training]"
         train_loss = train_one_epoch(
             model, train_loader, optimizer, device,
             best_params.get('dice_weight', FINAL_TRAIN_CONFIG['default_dice_weight']),
             desc_str=train_desc
         )
         
-        # 验证阶段
-        val_desc = f"最终训练 Epoch {epoch}/{final_epochs} [验证]"
+        # Validation phase
+        val_desc = f"Final Training Epoch {epoch}/{final_epochs} [Validation]"
         val_loss, val_iou = evaluate_model(
             model, val_loader, device,
             best_params.get('dice_weight', FINAL_TRAIN_CONFIG['default_dice_weight']),
             desc_str=val_desc
         )
         
-        # 更新训练日志
+        # Update training log
         current_lr = get_current_lr(optimizer)
         update_training_log(final_logger, epoch, train_loss, val_loss, current_lr)
         
-        print(f"  Epoch {epoch}: 训练损失={train_loss:.4f}, 验证损失={val_loss:.4f}, 验证IoU={val_iou:.4f}")
+        print(f"  Epoch {epoch}: Training loss={train_loss:.4f}, Validation loss={val_loss:.4f}, Validation IoU={val_iou:.4f}")
         
-        # 检查是否为最佳模型
+        # Check if this is the best model
         if val_loss < best_val_loss - min_delta:
             best_val_loss = val_loss
             best_epoch_model = epoch
@@ -127,7 +127,7 @@ def train_final_model(best_params: Dict):
             
             model_save_path = FINETUNED_MODEL_DIR / "best_model"
             
-            # 准备要保存的元数据
+            # Prepare metadata to save
             metadata = {
                 'best_train_loss': train_loss,
                 'best_val_loss': val_loss,
@@ -137,28 +137,28 @@ def train_final_model(best_params: Dict):
                 'total_epochs_planned': final_epochs
             }
             save_model(model, processor, model_save_path, metadata)
-            print(f"  ✨ 保存最佳模型 (验证损失: {val_loss:.4f}, IoU: {val_iou:.4f})")
+            print(f"  ✨ Saved best model (Validation loss: {val_loss:.4f}, IoU: {val_iou:.4f})")
         else:
             patience_counter += 1
             if patience_counter >= patience:
-                print(f"\n  🛑 早停触发: 验证损失已经 {patience} 轮没有改善")
+                print(f"\n  🛑 Early stopping triggered: Validation loss has not improved for {patience} epochs")
                 final_logger['metadata']['early_stopped'] = True
                 final_logger['metadata']['stopped_at_epoch'] = epoch
                 break
     
-    # 保存训练日志
+    # Save training log
     final_logger['metadata']['best_model_saved_at_epoch'] = best_epoch_model
     log_path = FINETUNED_MODEL_DIR / "final_training_log.json"
     save_training_log(final_logger, log_path)
     
-    print(f"\n✅ 最终模型训练完成! ")
-    print(f"   - 模型保存在: {FINETUNED_MODEL_DIR / 'best_model'}")
-    print(f"   - 训练日志保存在: {log_path}")
-    print(f"   - 最佳模型来自 epoch {best_epoch_model}/{final_epochs}")
+    print(f"\n✅ Final model training completed! ")
+    print(f"   - Model saved at: {FINETUNED_MODEL_DIR / 'best_model'}")
+    print(f"   - Training log saved at: {log_path}")
+    print(f"   - Best model from epoch {best_epoch_model}/{final_epochs}")
 
 def main():
-    """主函数：加载参数 -> 训练模型 -> 保存模型"""
-    print("🚀 步骤 3: 训练最终模型")
+    """Main function: load parameters -> train model -> save model"""
+    print("🚀 Step 3: Train final model")
     print("=" * 60)
     
     set_seed()
@@ -168,10 +168,10 @@ def main():
         best_params = load_best_hyperparameters()
         train_final_model(best_params)
     except (FileNotFoundError, ValueError) as e:
-        print(f"\n❌ 错误: {e}")
+        print(f"\n❌ Error: {e}")
         return
 
-    print("\n🎉 最终模型训练流程执行完成!")
+    print("\n🎉 Final model training workflow completed!")
 
 if __name__ == "__main__":
     main()
