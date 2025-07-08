@@ -1,8 +1,3 @@
-"""
-工具函数模块 - Stanford UGVR CV项目
-V2版：修正了与新config.py的兼容性问题。
-"""
-
 import os
 import random
 import torch
@@ -21,15 +16,13 @@ from typing import List, Dict
 import json
 import albumentations as A
 
-# 导入配置
-# 这里的 '*' 会导入新版config.py中的所有全局变量和配置字典
 from config import *
 
 # ==============================================================================
-# 数据集类 (无变化)
+# Dataset Classes
 # ==============================================================================
 class FineTuneDataset(Dataset):
-    """CLIPSeg微调数据集"""
+    """CLIPSeg fine-tuning dataset"""
     def __init__(self, image_paths: List[str], mask_dir: str, classes: List[str], processor):
         self.image_paths = image_paths
         self.mask_dir = mask_dir
@@ -63,10 +56,10 @@ class FineTuneDataset(Dataset):
         }
 
 # ==============================================================================
-# 数据加载与模型创建 (无变化)
+# Data Loading and Model Creation
 # ==============================================================================
 def collate_fn(batch, processor):
-    """数据批处理函数"""
+    """Data batch processing function"""
     pixel_values = torch.stack([item["pixel_values"] for item in batch])
     labels = torch.stack([item["labels"] for item in batch])
     input_ids = pad_sequence([item["input_ids"] for item in batch], batch_first=True, padding_value=processor.tokenizer.pad_token_id)
@@ -75,34 +68,34 @@ def collate_fn(batch, processor):
     return {"pixel_values": pixel_values, "input_ids": input_ids, "attention_mask": attention_mask, "labels": labels, "class_indices": class_indices}
 
 def create_data_loader(image_paths: List[str], mask_dir: str, classes: List[str], processor, batch_size: int, shuffle: bool = True) -> DataLoader:
-    """创建数据加载器"""
+    """Create data loader"""
     dataset = FineTuneDataset(image_paths, mask_dir, classes, processor)
     return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, num_workers=NUM_WORKERS, collate_fn=lambda b: collate_fn(b, processor))
 
 def create_model_and_optimizer(learning_rate: float, device):
-    """创建模型和优化器"""
+    """Create model and optimizer"""
     model = CLIPSegForImageSegmentation.from_pretrained(PRETRAINED_MODEL).to(device)
     optimizer = AdamW(model.parameters(), lr=learning_rate)
     return model, optimizer
 
 # ==============================================================================
-# 损失与评估 (无变化)
+# Loss and Evaluation
 # ==============================================================================
 def dice_loss(logits, targets, eps=1e-7):
-    """Dice损失函数"""
+    """Dice loss function"""
     preds = torch.sigmoid(logits)
     num = 2 * (preds * targets).sum(dim=[2, 3])
     den = preds.sum(dim=[2, 3]) + targets.sum(dim=[2, 3]) + eps
     return (1 - (num / den)).mean()
 
 def calculate_combined_loss(logits, labels, dice_weight: float = 0.8):
-    """计算组合损失（BCE + Dice）"""
+    """Calculate combined loss (BCE + Dice)"""
     bce = F.binary_cross_entropy_with_logits(logits, labels)
     dsc = dice_loss(logits, labels)
     return bce + dice_weight * dsc
 
 def calculate_iou(pred_mask, true_mask, threshold=0.5):
-    """计算IoU指标"""
+    """Calculate IoU metric"""
     pred_binary = (pred_mask > threshold).astype(np.uint8)
     true_binary = (true_mask > 0).astype(np.uint8)
     intersection = np.logical_and(pred_binary, true_binary).sum()
@@ -110,10 +103,10 @@ def calculate_iou(pred_mask, true_mask, threshold=0.5):
     return (intersection / union) if union > 0 else 1.0
 
 # ==============================================================================
-# 训练与评估核心循环 (无变化)
+# Training and Evaluation Core Loops
 # ==============================================================================
-def train_one_epoch(model, train_loader, optimizer, device, dice_weight: float, desc_str: str = "训练中"):
-    """训练一个epoch。"""
+def train_one_epoch(model, train_loader, optimizer, device, dice_weight: float, desc_str: str = "Training"):
+    """Train one epoch."""
     model.train()
     total_loss = 0
     for batch in tqdm(train_loader, desc=desc_str, leave=False):
@@ -127,8 +120,8 @@ def train_one_epoch(model, train_loader, optimizer, device, dice_weight: float, 
         total_loss += loss.item()
     return total_loss / len(train_loader)
 
-def evaluate_model(model, val_loader, device, dice_weight: float, desc_str: str = "评估中"):
-    """评估模型。"""
+def evaluate_model(model, val_loader, device, dice_weight: float, desc_str: str = "Evaluating"):
+    """Evaluate model."""
     model.eval()
     total_loss = 0
     all_ious = []
@@ -147,10 +140,10 @@ def evaluate_model(model, val_loader, device, dice_weight: float, desc_str: str 
     return avg_loss, avg_iou
 
 # ==============================================================================
-# 其他公共函数 (已修正)
+# Other Public Functions
 # ==============================================================================
 def get_augmentation_transform():
-    """获取数据增强变换，基于配置文件"""
+    """Get data augmentation transforms based on configuration file"""
     transforms = []
     if AUGMENTATION_CONFIG.get('horizontal_flip'):
         transforms.append(A.HorizontalFlip(p=0.5))
@@ -168,7 +161,7 @@ def get_augmentation_transform():
     return A.Compose(transforms)
 
 def save_model(model, processor, save_path: Path, metadata: Dict = None):
-    """保存模型、处理器和元数据。"""
+    """Save model, processor and metadata."""
     save_path.mkdir(parents=True, exist_ok=True)
     model.save_pretrained(save_path)
     processor.save_pretrained(save_path)
@@ -177,7 +170,7 @@ def save_model(model, processor, save_path: Path, metadata: Dict = None):
             json.dump(metadata, f, indent=4)
 
 def set_seed(seed=RANDOM_SEED):
-    """设置随机种子以确保可重现性"""
+    """Set random seed to ensure reproducibility"""
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -186,8 +179,8 @@ def set_seed(seed=RANDOM_SEED):
 
 def ensure_dirs():
     """
-    【已修正】确保所有必要的目录存在。
-    现在只创建在config.py中明确定义的顶级目录。
+    [Fixed] Ensure all necessary directories exist.
+    Now only creates top-level directories explicitly defined in config.py.
     """
     dirs_to_create = [
         DATA_DIR, 
@@ -200,7 +193,7 @@ def ensure_dirs():
         dir_path.mkdir(parents=True, exist_ok=True)
 
 def get_device():
-    """获取可用的设备"""
+    """Get available device"""
     if DEVICE == 'auto':
         if torch.cuda.is_available(): return torch.device("cuda")
         if hasattr(torch.backends, 'mps') and torch.backends.mps.is_available(): return torch.device("mps")
@@ -209,10 +202,10 @@ def get_device():
 
 def get_hyperparameter_from_trial(trial, param_name):
     """
-    【已修正】从Optuna trial中获取超参数。
-    现在从 SEARCH_CONFIG['space'] 中读取搜索空间。
+    [Fixed] Get hyperparameters from Optuna trial.
+    Now reads search space from SEARCH_CONFIG['space'].
     """
-    # 从新的配置结构中获取参数定义
+    # Get parameter definition from new configuration structure
     param_config = SEARCH_CONFIG['space'][param_name]
     
     if param_config['type'] == 'loguniform':
@@ -221,20 +214,20 @@ def get_hyperparameter_from_trial(trial, param_name):
         return trial.suggest_float(param_name, param_config['low'], param_config['high'])
     elif param_config['type'] == 'categorical':
         return trial.suggest_categorical(param_name, param_config['choices'])
-    raise ValueError(f"未知的参数类型: {param_config['type']}")
+    raise ValueError(f"Unknown parameter type: {param_config['type']}")
 
 def save_config(config_dict, filename):
-    """保存配置到JSON文件"""
+    """Save configuration to JSON file"""
     output_path = Path(filename)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w') as f:
         json.dump(config_dict, f, indent=4)
 
 # ==============================================================================
-# 训练日志记录功能
+# Training Logging Functionality
 # ==============================================================================
 def create_training_logger():
-    """创建训练日志记录器"""
+    """Create training logger"""
     return {
         'epochs': [],
         'train_losses': [],
@@ -247,7 +240,7 @@ def create_training_logger():
     }
 
 def update_training_log(logger, epoch, train_loss, val_loss=None, lr=None):
-    """更新训练日志"""
+    """Update training log"""
     from datetime import datetime
     
     logger['epochs'].append(epoch)
@@ -255,7 +248,7 @@ def update_training_log(logger, epoch, train_loss, val_loss=None, lr=None):
     
     if val_loss is not None:
         logger['val_losses'].append(float(val_loss))
-        # 更新最佳记录
+        # Update best record
         if val_loss < logger['best_loss']:
             logger['best_loss'] = float(val_loss)
             logger['best_epoch'] = epoch
@@ -266,11 +259,11 @@ def update_training_log(logger, epoch, train_loss, val_loss=None, lr=None):
     logger['timestamps'].append(datetime.now().isoformat())
     
 def save_training_log(logger, save_path):
-    """保存训练日志到JSON文件"""
+    """Save training log to JSON file"""
     save_path = Path(save_path)
     save_path.parent.mkdir(parents=True, exist_ok=True)
     
-    # 添加总结信息
+    # Add summary information
     if logger['epochs']:
         logger['metadata']['total_epochs'] = logger['epochs'][-1]
         logger['metadata']['final_train_loss'] = logger['train_losses'][-1]
@@ -282,33 +275,33 @@ def save_training_log(logger, save_path):
     with open(save_path, 'w') as f:
         json.dump(logger, f, indent=2)
     
-    print(f"📊 训练日志已保存到: {save_path}")
+    print(f"📊 Training log saved to: {save_path}")
 
 def get_current_lr(optimizer):
-    """获取当前学习率"""
+    """Get current learning rate"""
     return optimizer.param_groups[0]['lr']
 
 def load_model(model_path: Path, device):
-    """加载训练好的模型、处理器和元数据
+    """Load trained model, processor and metadata
     
     Args:
-        model_path: 模型目录路径
-        device: 计算设备
+        model_path: Model directory path
+        device: Computation device
         
     Returns:
-        model: 加载的模型
-        processor: CLIPSeg处理器
-        metadata: 训练元数据（如果存在）
+        model: Loaded model
+        processor: CLIPSeg processor
+        metadata: Training metadata (if exists)
     """
-    # 加载处理器
+    # Load processor
     processor = CLIPSegProcessor.from_pretrained(model_path)
     
-    # 加载模型
+    # Load model
     model = CLIPSegForImageSegmentation.from_pretrained(model_path)
     model.to(device)
     model.eval()
     
-    # 尝试加载元数据
+    # Try to load metadata
     metadata = None
     metadata_path = model_path / "training_metadata.json"
     if metadata_path.exists():
