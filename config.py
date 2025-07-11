@@ -108,7 +108,7 @@ FINAL_TRAIN_CONFIG = {
 # 5. System & Evaluation Configuration
 # ==============================================================================
 RANDOM_SEED = DATASET_CONFIG['random_seed']
-DEVICE = 'cpu'  # Global device configuration: 'auto', 'cuda', 'cpu', 'mps'
+DEVICE = 'cuda'  # Global device configuration: 'auto', 'cuda', 'cpu', 'mps'
 NUM_WORKERS = 0 # Set to 0 for debugging convenience
 
 EVALUATION_CONFIG = {
