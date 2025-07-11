@@ -9,6 +9,7 @@ import json
 from datetime import datetime
 from typing import Dict
 import sys
+import gc
 
 # Add project root directory to Python path
 sys.path.append(str(Path(__file__).resolve().parent.parent))
@@ -106,10 +107,19 @@ def train_and_evaluate_fold(fold_idx: int, trial_num: int, fold_data: Dict, hype
                 fold_logger['metadata']['stopped_at_epoch'] = epoch
                 break
     
-    return {
+    result = {
         'best_val_loss': best_val_loss,
         'fold_logger': fold_logger
     }
+
+    # Execute cleanup code before returning
+    print(f"  [T{trial_num+1}/F{fold_idx+1}] Cleaning up fold resources.")
+    del model, optimizer, train_loader, val_loader
+    gc.collect()
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+    return result
 
 def objective(trial, fold_info: Dict, device, processor) -> float:
     """Optuna objective function."""
