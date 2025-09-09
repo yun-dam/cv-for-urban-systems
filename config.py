@@ -63,7 +63,7 @@ AUGMENTATION_CONFIG = {
 # For hyperparameter_search.py
 SEARCH_CONFIG = {
     # Optuna framework settings
-    'n_trials': 20,               # LAPTOP: 2 | SERVER: 20 (total number of hyperparameter combinations to try)
+    'n_trials': 50,               # LAPTOP: 2 | SERVER: 20 (total number of hyperparameter combinations to try)
     'study_name': 'clipseg_cv_search_laptop',
     'direction': 'minimize',     # Optimization direction: minimize validation loss
 
@@ -75,7 +75,7 @@ SEARCH_CONFIG = {
     'space': {
         'learning_rate': {'type': 'loguniform', 'low': 1e-6, 'high': 5e-4},
         'dice_weight':   {'type': 'uniform', 'low': 0.5, 'high': 0.9},
-        'batch_size':    {'type': 'categorical', 'choices': [2, 4, 8]},
+        'batch_size':    {'type': 'categorical', 'choices': [4, 8, 16]},  # VM optimized: higher batch sizes
     }
 }
 
@@ -95,7 +95,7 @@ FINAL_TRAIN_CONFIG = {
     # will be overwritten by the best values found by hyperparameter search.
     # These values are only used for debugging or as fallback when no search results exist.
     'default_learning_rate': 5e-5,
-    'default_batch_size': 4,
+    'default_batch_size': 8,  # VM optimized: larger batch size for 14GB RAM
     'default_dice_weight': 0.8,
     
     # Checkpoint configuration
@@ -108,18 +108,28 @@ FINAL_TRAIN_CONFIG = {
 # 5. System & Evaluation Configuration
 # ==============================================================================
 RANDOM_SEED = DATASET_CONFIG['random_seed']
-DEVICE = 'cpu'  # Global device configuration: 'auto', 'cuda', 'cpu', 'mps'
-NUM_WORKERS = 0 # Set to 0 for debugging convenience
+DEVICE = 'auto'  # Global device configuration: 'auto', 'cuda', 'cpu', 'mps' - VM optimized
+NUM_WORKERS = 4 # VM optimized: match CPU core count for better data loading
 
 EVALUATION_CONFIG = {
     'default_model_path': FINETUNED_MODEL_DIR / "best_model",
     'default_test_data': FINETUNE_DATA_DIR / "test" / "images",
     'default_output_dir': OUTPUT_DIR / "evaluation",
-    'batch_size': 2,
+    'batch_size': 8,  # VM optimized: larger batch size
     'num_visualization_samples': 20,     # Number of samples to visualize in evaluation
     'figure_size': (16, 16),
     'visualization_dpi': 150,
 }
+
+# EVALUATION_CONFIG = {
+#     'default_model_path': "models/sample_size_experiment/model_10/best_model",
+#     'default_test_data': "data/Vaihingen/sample_size_experiment/fixed_test_set",
+#     'default_output_dir': "output/sample_size_experiment/evaluation/model_10",
+#     'batch_size': 8,  # VM optimized: larger batch size
+#     'num_visualization_samples': 20,     # Number of samples to visualize in evaluation
+#     'figure_size': (16, 16),
+#     'visualization_dpi': 150,
+# }
 
 if __name__ == "__main__":
     print("✅ config.py: Configuration file loaded successfully.")

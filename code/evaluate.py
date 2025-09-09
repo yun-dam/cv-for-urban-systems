@@ -25,6 +25,11 @@ from utils import (
     get_device
 )
 
+# Disable warnings
+import warnings
+warnings.filterwarnings("ignore", message="The following named arguments are not valid")
+warnings.filterwarnings("ignore", message="Using a slow image processor")
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description='CLIPSeg Model Evaluation Script')
